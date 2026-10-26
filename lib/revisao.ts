@@ -20,6 +20,15 @@ export function estaDevida(questao: Questao, agora = Date.now()) {
   return (questao.proximaEm ?? 0) <= agora;
 }
 
+export function limitarSimulado<T extends Questao>(devidas: T[], quantidade: number) {
+  const ordenadas = devidas.slice().sort((a, b) => {
+    if (a.statusRevisao !== b.statusRevisao) return compararRevisao(a, b);
+    return (a.proximaEm ?? 0) - (b.proximaEm ?? 0) || compararRevisao(a, b);
+  });
+  const prova = ordenadas.slice(0, quantidade);
+  return { prova, sobraram: ordenadas.length - prova.length };
+}
+
 export function separarSimulado<T extends Questao>(questoes: T[], agora = Date.now()) {
   const entram: T[] = [];
   const esperando: T[] = [];

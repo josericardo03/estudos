@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useRef, useState } from "react";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { aplicarJulgamento, compararRevisao, descreverVolta, proximaData, separarSimulado } from "@/lib/revisao";
+import { aplicarJulgamento, compararRevisao, descreverVolta, limitarSimulado, proximaData, separarSimulado } from "@/lib/revisao";
 import { caminhoBloco } from "@/lib/rotas";
 import type { Materia, Questao, StatusRevisao } from "@/lib/types";
 import { STATUS_REVISAO } from "@/lib/types";
@@ -236,7 +236,10 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [encerrado, setEncerrado] = useState(false);
   const [gerando, setGerando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [quantidade, setQuantidade] = useState("20");
   const [deFora, setDeFora] = useState(0);
+  const [sobraram, setSobraram] = useState(0);
+  const [pedido, setPedido] = useState<number | null>(null);
   const [julgamentos, setJulgamentos] = useState<Record<string, { acertou: boolean; texto: string }>>({});
   const tentativasDaProva = useRef<Record<string, string>>({});
   const ids = escolhidas ?? materias.map((materia) => materia.id);
@@ -250,6 +253,11 @@ function Simulado({ materias }: { materias: Materia[] }) {
     setErro(null);
     if (!ids.length) {
       setErro("Escolha ao menos uma matéria.");
+      return;
+    }
+    const pedidoNumero = Number(quantidade);
+    if (!Number.isInteger(pedidoNumero) || pedidoNumero < 1) {
+      setErro("Diga quantas questões, pelo menos 1.");
       return;
     }
     setGerando(true);
@@ -272,10 +280,13 @@ function Simulado({ materias }: { materias: Materia[] }) {
         );
         return;
       }
+      const { prova: selecionadas, sobraram: restantes } = limitarSimulado(entram, pedidoNumero);
       setDeFora(esperando.length);
+      setSobraram(restantes);
+      setPedido(pedidoNumero);
       setJulgamentos({});
       tentativasDaProva.current = {};
-      setProva(embaralhar(entram));
+      setProva(embaralhar(selecionadas));
       setIndice(0);
       setRascunhos({});
       setEncerrado(false);
@@ -342,6 +353,23 @@ function Simulado({ materias }: { materias: Materia[] }) {
             ))}
           </ul>
         </fieldset>
+        <div className="mt-4 max-w-xs">
+          <label className="rotulo" htmlFor="quantidade-simulado">
+            Quantidade
+          </label>
+          <input
+            id="quantidade-simulado"
+            className="campo"
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={quantidade}
+            onChange={(evento) => setQuantidade(evento.target.value)}
+          />
+          <p className="mt-2 text-sm text-muted">
+            No máximo essas, entre as que já voltaram. Se houver menos, o simulado fica com as que tem. As que você errou entram primeiro.
+          </p>
+        </div>
         <button className="btn btn-primario mt-4" type="submit" disabled={gerando || materias.length === 0}>
           {gerando ? "Gerando…" : "Gerar simulado"}
         </button>
@@ -411,7 +439,9 @@ function Simulado({ materias }: { materias: Materia[] }) {
     <div className="mt-6">
       <p className="text-sm text-muted">
         Questão {Math.min(indice, prova.length - 1) + 1} de {prova.length}. O gabarito aparece no fim.
-        {deFora > 0 ? ` ${deFora} ${deFora === 1 ? "questão ficou" : "questões ficaram"} para depois, porque você acertou.` : ""}
+        {pedido !== null && pedido > prova.length ? ` Você pediu ${pedido}. Há ${prova.length} no banco agora.` : ""}
+        {sobraram > 0 ? ` ${sobraram} ${sobraram === 1 ? "continua" : "continuam"} no banco para o próximo simulado.` : ""}
+        {deFora > 0 ? ` ${deFora} ${deFora === 1 ? "ficou" : "ficaram"} para depois, porque você acertou.` : ""}
       </p>
       <article className="cartao mt-3 p-5" key={atual.id}>
         <p className="text-sm text-muted">
