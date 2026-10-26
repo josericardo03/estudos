@@ -8,6 +8,7 @@ import type {
   PdfDoc,
   PostIt,
   Questao,
+  Tentativa,
 } from "./types";
 
 class BancoFoco extends Dexie {
@@ -17,6 +18,7 @@ class BancoFoco extends Dexie {
   grifos!: Table<Grifo, string>;
   postits!: Table<PostIt, string>;
   questoes!: Table<Questao, string>;
+  tentativas!: Table<Tentativa, string>;
   editais!: Table<Edital, string>;
   editalMaterias!: Table<EditalMateria, string>;
 
@@ -31,6 +33,9 @@ class BancoFoco extends Dexie {
       questoes: "id, blocoId, materiaId, pdfId, statusRevisao, createdAt",
       editais: "id, createdAt",
       editalMaterias: "id, editalId, materiaId",
+    });
+    this.version(2).stores({
+      tentativas: "id, questaoId, pdfId, materiaId, blocoId, em",
     });
   }
 }

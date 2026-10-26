@@ -18,6 +18,7 @@ import type {
   Rect,
   StatusBloco,
   StatusRevisao,
+  Tentativa,
 } from "./types";
 import { MAX_QUESTOES } from "./types";
 
@@ -79,17 +80,19 @@ export const repo = {
       const db = getDb();
       await db.transaction(
         "rw",
-        [db.materias, db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, db.editalMaterias],
+        [db.materias, db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, db.tentativas, db.editalMaterias],
         async () => {
           const pdfs = await db.pdfs.where("materiaId").equals(idMateria).toArray();
           for (const pdf of pdfs) {
             await db.grifos.where("pdfId").equals(pdf.id).delete();
             await db.postits.where("pdfId").equals(pdf.id).delete();
             await db.questoes.where("pdfId").equals(pdf.id).delete();
+            await db.tentativas.where("pdfId").equals(pdf.id).delete();
             await db.blocos.where("pdfId").equals(pdf.id).delete();
           }
           await db.pdfs.where("materiaId").equals(idMateria).delete();
           await db.questoes.where("materiaId").equals(idMateria).delete();
+          await db.tentativas.where("materiaId").equals(idMateria).delete();
           await db.editalMaterias.where("materiaId").equals(idMateria).delete();
           await db.materias.delete(idMateria);
         },
@@ -98,6 +101,10 @@ export const repo = {
   },
 
   pdfs: {
+    async listarTodos(): Promise<PdfDoc[]> {
+      const lista = await getDb().pdfs.toArray();
+      return lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    },
     async listarPorMateria(materiaId: string): Promise<PdfDoc[]> {
       const lista = await getDb().pdfs.where("materiaId").equals(materiaId).toArray();
       return lista.sort((a, b) => a.createdAt - b.createdAt);
@@ -127,10 +134,11 @@ export const repo = {
     },
     async remover(pdfId: string) {
       const db = getDb();
-      await db.transaction("rw", db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, async () => {
+      await db.transaction("rw", [db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, db.tentativas], async () => {
         await db.grifos.where("pdfId").equals(pdfId).delete();
         await db.postits.where("pdfId").equals(pdfId).delete();
         await db.questoes.where("pdfId").equals(pdfId).delete();
+        await db.tentativas.where("pdfId").equals(pdfId).delete();
         await db.blocos.where("pdfId").equals(pdfId).delete();
         await db.pdfs.delete(pdfId);
       });
@@ -138,6 +146,9 @@ export const repo = {
   },
 
   blocos: {
+    async listarTodos() {
+      return ordenarBlocos(await getDb().blocos.toArray());
+    },
     async listarPorPdf(pdfId: string) {
       return ordenarBlocos(await getDb().blocos.where("pdfId").equals(pdfId).toArray());
     },
@@ -216,8 +227,9 @@ export const repo = {
       const db = getDb();
       const bloco = await db.blocos.get(blocoId);
       if (!bloco) return;
-      await db.transaction("rw", db.blocos, db.questoes, async () => {
+      await db.transaction("rw", db.blocos, db.questoes, db.tentativas, async () => {
         await db.questoes.where("blocoId").equals(blocoId).delete();
+        await db.tentativas.where("blocoId").equals(blocoId).delete();
         await db.blocos.delete(blocoId);
       });
       await sincronizarAnotacoes(bloco.pdfId);
@@ -361,6 +373,8 @@ export const repo = {
         enunciado,
         resposta,
         statusRevisao: "nova",
+        sequencia: 0,
+        proximaEm: Date.now(),
         createdAt: Date.now(),
       };
       await db.transaction("rw", db.questoes, async () => {
@@ -382,8 +396,30 @@ export const repo = {
       const alteradas = await getDb().questoes.update(questaoId, { statusRevisao });
       if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
     },
+    async registrarJulgamento(
+      questaoId: string,
+      entrada: { sequencia: number; proximaEm: number; statusRevisao: StatusRevisao },
+      tentativa: Omit<Tentativa, "questaoId" | "em">,
+    ) {
+      const db = getDb();
+      await db.transaction("rw", db.questoes, db.tentativas, async () => {
+        const alteradas = await db.questoes.update(questaoId, entrada);
+        if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
+        await db.tentativas.put({ ...tentativa, questaoId, em: Date.now() });
+      });
+    },
     async remover(questaoId: string) {
-      await getDb().questoes.delete(questaoId);
+      const db = getDb();
+      await db.transaction("rw", db.questoes, db.tentativas, async () => {
+        await db.tentativas.where("questaoId").equals(questaoId).delete();
+        await db.questoes.delete(questaoId);
+      });
+    },
+  },
+
+  tentativas: {
+    async listar(): Promise<Tentativa[]> {
+      return getDb().tentativas.toArray();
     },
   },
 

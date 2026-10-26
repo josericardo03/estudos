@@ -19,6 +19,10 @@ export function caminhoBloco(materiaId: string, pdfId: string, blocoId: string) 
   return `/materias/${materiaId}/pdfs/${pdfId}/blocos/${blocoId}`;
 }
 
+export function caminhoDesempenho() {
+  return "/desempenho";
+}
+
 export function caminhoBanco(materiaId?: string) {
   return materiaId ? `/banco?materia=${materiaId}` : "/banco";
 }

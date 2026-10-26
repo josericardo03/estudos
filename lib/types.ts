@@ -58,6 +58,16 @@ export type PostIt = {
   createdAt: number;
 };
 
+export type Tentativa = {
+  id: string;
+  questaoId: string;
+  pdfId: string;
+  materiaId: string;
+  blocoId: string;
+  acertou: boolean;
+  em: number;
+};
+
 export type Questao = {
   id: string;
   blocoId: string;
@@ -66,6 +76,10 @@ export type Questao = {
   enunciado: string;
   resposta: string;
   statusRevisao: StatusRevisao;
+  /** Acertos seguidos. Erro zera. Questões antigas não têm o campo e contam como zero. */
+  sequencia?: number;
+  /** Quando a questão pode voltar num simulado. Ausente ou no passado: continua no banco. */
+  proximaEm?: number;
   createdAt: number;
 };
 

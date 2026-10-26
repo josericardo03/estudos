@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { compararRevisao } from "@/lib/revisao";
+import { aplicarJulgamento, compararRevisao, descreverVolta, proximaData, separarSimulado } from "@/lib/revisao";
 import { caminhoBloco } from "@/lib/rotas";
 import type { Materia, Questao, StatusRevisao } from "@/lib/types";
 import { STATUS_REVISAO } from "@/lib/types";
@@ -236,6 +236,9 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [encerrado, setEncerrado] = useState(false);
   const [gerando, setGerando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [deFora, setDeFora] = useState(0);
+  const [julgamentos, setJulgamentos] = useState<Record<string, { acertou: boolean; texto: string }>>({});
+  const tentativasDaProva = useRef<Record<string, string>>({});
   const ids = escolhidas ?? materias.map((materia) => materia.id);
   const todas = materias.length > 0 && materias.every((materia) => ids.includes(materia.id));
 
@@ -251,12 +254,28 @@ function Simulado({ materias }: { materias: Materia[] }) {
     }
     setGerando(true);
     try {
-      const cartoes = embaralhar(await carregarCartoes(ids));
+      const cartoes = await carregarCartoes(ids);
       if (!cartoes.length) {
         setErro("Nenhuma questão nessas matérias.");
         return;
       }
-      setProva(cartoes);
+      const { entram, esperando } = separarSimulado(cartoes);
+      if (!entram.length) {
+        const quando = proximaData(esperando);
+        const data = quando
+          ? new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long" }).format(quando)
+          : "";
+        setErro(
+          data
+            ? `Nada no banco para agora. As questões que você acertou voltam a partir de ${data}.`
+            : "Nada no banco para agora.",
+        );
+        return;
+      }
+      setDeFora(esperando.length);
+      setJulgamentos({});
+      tentativasDaProva.current = {};
+      setProva(embaralhar(entram));
       setIndice(0);
       setRascunhos({});
       setEncerrado(false);
@@ -264,6 +283,28 @@ function Simulado({ materias }: { materias: Materia[] }) {
       setErro(mensagemErro(falha, "Não foi possível gerar o simulado."));
     } finally {
       setGerando(false);
+    }
+  }
+
+  async function julgar(questao: Cartao, acertou: boolean) {
+    setErro(null);
+    const agenda = aplicarJulgamento(questao, acertou);
+    const idTentativa = tentativasDaProva.current[questao.id] ?? crypto.randomUUID();
+    tentativasDaProva.current[questao.id] = idTentativa;
+    try {
+      await repo.questoes.registrarJulgamento(questao.id, agenda, {
+        id: idTentativa,
+        pdfId: questao.pdfId,
+        materiaId: questao.materiaId,
+        blocoId: questao.blocoId,
+        acertou,
+      });
+      setJulgamentos((atuais) => ({
+        ...atuais,
+        [questao.id]: { acertou, texto: descreverVolta(agenda.proximaEm) },
+      }));
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível guardar o resultado."));
     }
   }
 
@@ -279,7 +320,9 @@ function Simulado({ materias }: { materias: Materia[] }) {
         {erro ? <div className="mb-4"><Aviso texto={erro} /></div> : null}
         <fieldset>
           <legend className="rotulo">Matérias do simulado</legend>
-          <p className="mb-3 text-sm text-muted">Uma matéria, várias ou todas. As questões saem embaralhadas.</p>
+          <p className="mb-3 text-sm text-muted">
+            Entram as questões que estão no banco. Acerto empurra a próxima vez. Erro deixa a questão para o simulado seguinte.
+          </p>
           <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
             <input
               type="checkbox"
@@ -311,8 +354,9 @@ function Simulado({ materias }: { materias: Materia[] }) {
     return (
       <div className="mt-6">
         <p className="text-sm text-muted">
-          {respondidas} de {prova.length} com resposta escrita.
+          {respondidas} de {prova.length} com resposta escrita. Marque cada uma: o acerto adia, o erro continua no banco.
         </p>
+        {erro ? <div className="mt-4"><Aviso texto={erro} /></div> : null}
         <ol className="mt-4 flex flex-col gap-3">
           {prova.map((questao, posicao) => (
             <li key={questao.id} className="cartao p-4">
@@ -324,6 +368,25 @@ function Simulado({ materias }: { materias: Materia[] }) {
               <p className="mt-1">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
               <p className="mt-4 text-sm text-muted">Gabarito</p>
               <p className="mt-1 font-serif text-xl leading-relaxed">{questao.resposta}</p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn"
+                  aria-pressed={julgamentos[questao.id]?.acertou === true}
+                  onClick={() => void julgar(questao, true)}
+                >
+                  Acertei
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  aria-pressed={julgamentos[questao.id]?.acertou === false}
+                  onClick={() => void julgar(questao, false)}
+                >
+                  Errei
+                </button>
+                {julgamentos[questao.id] ? <span className="text-sm text-pine">{julgamentos[questao.id].texto}</span> : null}
+              </div>
             </li>
           ))}
         </ol>
@@ -348,6 +411,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     <div className="mt-6">
       <p className="text-sm text-muted">
         Questão {Math.min(indice, prova.length - 1) + 1} de {prova.length}. O gabarito aparece no fim.
+        {deFora > 0 ? ` ${deFora} ${deFora === 1 ? "questão ficou" : "questões ficaram"} para depois, porque você acertou.` : ""}
       </p>
       <article className="cartao mt-3 p-5" key={atual.id}>
         <p className="text-sm text-muted">
