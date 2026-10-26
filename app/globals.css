@@ -1,0 +1,420 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #efe6d6;
+  --sheet: #fbf7f0;
+  --ink: #221c16;
+  --muted: #6e655b;
+  --line: #e0d3c2;
+  --pine: #1d4a38;
+  --pine-soft: #e6f0ea;
+  --alta: #9c2f1a;
+  --alta-soft: #f8ddd6;
+  --media: #8a5a00;
+  --media-soft: #f6e7c2;
+  --baixa: #1e4d6b;
+  --baixa-soft: #d9e7f1;
+  --note: #f4e3a0;
+  --font-outfit: "Outfit", sans-serif;
+  --font-fraunces: "Fraunces", serif;
+}
+
+@theme inline {
+  --font-sans: var(--font-outfit);
+  --font-serif: var(--font-fraunces);
+  --color-paper: var(--paper);
+  --color-sheet: var(--sheet);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-pine: var(--pine);
+  --color-pine-soft: var(--pine-soft);
+  --color-alta: var(--alta);
+  --color-alta-soft: var(--alta-soft);
+  --color-media: var(--media);
+  --color-media-soft: var(--media-soft);
+  --color-baixa: var(--baixa);
+  --color-baixa-soft: var(--baixa-soft);
+  --color-note: var(--note);
+}
+
+body {
+  background:
+    radial-gradient(900px 420px at 0% -10%, rgb(29 74 56 / 0.08), transparent 55%),
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--font-outfit), sans-serif;
+}
+
+::selection {
+  background: rgb(29 74 56 / 0.18);
+}
+
+.olho {
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--pine);
+  font-weight: 600;
+}
+
+.rotulo {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.campo {
+  width: 100%;
+  border: 1px solid #d9cbb8;
+  background: #fffdf8;
+  color: var(--ink);
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+}
+
+.campo:focus-visible,
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.4rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid #d9cbb8;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:hover {
+  background: #fff;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primario {
+  background: var(--pine);
+  border-color: var(--pine);
+  color: #f7f1e6;
+}
+
+.btn-primario:hover {
+  background: #16392b;
+  color: #f7f1e6;
+}
+
+.btn-perigo {
+  color: var(--alta);
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 0.2rem;
+}
+
+.btn-perigo:hover {
+  background: var(--alta-soft);
+}
+
+.btn-cor-alta {
+  background: var(--alta-soft);
+  border-color: var(--alta);
+  color: var(--alta);
+}
+
+.btn-cor-media {
+  background: var(--media-soft);
+  border-color: var(--media);
+  color: var(--media);
+}
+
+.btn-cor-baixa {
+  background: var(--baixa-soft);
+  border-color: var(--baixa);
+  color: var(--baixa);
+}
+
+.aviso {
+  border: 1px solid #e7c4ba;
+  background: #fbf1ee;
+  color: var(--alta);
+  padding: 0.7rem 0.85rem;
+  font-size: 0.92rem;
+}
+
+.selo {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  padding: 0.12rem 0.45rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.selo-pine {
+  border-color: var(--pine);
+  color: var(--pine);
+  background: var(--pine-soft);
+}
+
+.marca {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quadrado {
+  width: 0.7rem;
+  height: 0.7rem;
+  display: inline-block;
+}
+
+.quadrado-alta,
+.marca-alta { color: var(--alta); }
+.quadrado-alta { background: var(--alta); }
+.quadrado-media,
+.marca-media { color: var(--media); }
+.quadrado-media { background: var(--media); }
+.quadrado-baixa,
+.marca-baixa { color: var(--baixa); }
+.quadrado-baixa { background: var(--baixa); }
+
+.nav-link {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.35rem 0.15rem;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-link-ativa {
+  color: var(--ink);
+  border-bottom-color: var(--pine);
+}
+
+.recorte {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.citacao {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.citacao[data-prioridade="alta"] {
+  border-color: var(--alta);
+  background: var(--alta-soft);
+}
+
+.citacao[data-prioridade="media"] {
+  border-color: var(--media);
+  background: var(--media-soft);
+}
+
+.citacao[data-prioridade="baixa"] {
+  border-color: var(--baixa);
+  background: var(--baixa-soft);
+}
+
+.nota {
+  background: var(--note);
+  color: #3d3110;
+  padding: 0.75rem 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.folha {
+  --user-unit: 1;
+  --scale-factor: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: relative;
+  margin-inline: auto;
+  background: white;
+  box-shadow: 0 16px 40px rgb(48 32 16 / 0.16);
+  font-family: sans-serif;
+}
+
+.folha-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.grifo {
+  position: absolute;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+.grifo-alta { background: rgb(156 47 26 / 0.38); }
+.grifo-media { background: rgb(184 122 0 / 0.45); }
+.grifo-baixa { background: rgb(30 77 107 / 0.34); }
+
+.postit-marca {
+  position: absolute;
+  z-index: 5;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fffdf8;
+  border-radius: 999px;
+  background: #e2b43a;
+  box-shadow: 0 0 0 1px #8a5a00;
+  cursor: pointer;
+}
+
+.postit-marca[aria-pressed="true"] {
+  background: #8a5a00;
+}
+
+.postit-item {
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  padding: 0.45rem 0.55rem;
+}
+
+.postit-item-aberto {
+  border-color: #c6a24a;
+  background: #fff8df;
+}
+
+.postit-item-texto {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+  text-align: left;
+  white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.marca-camada {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.popup {
+  width: min(36rem, calc(100vw - 2rem));
+  max-height: min(40rem, calc(100dvh - 2rem));
+  margin: auto;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+  color: var(--ink);
+  padding: 0;
+}
+
+.popup::backdrop {
+  background: rgb(34 28 22 / 0.45);
+}
+
+.btn[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.barra-grifo {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgb(40 28 16 / 0.16);
+}
+
+.textLayer {
+  color-scheme: only light;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  z-index: 2;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  box-sizing: content-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  user-select: text;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+  display: contents;
+}
+
+.textLayer ::selection {
+  background: rgb(29 74 56 / 0.28);
+  color: transparent;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
