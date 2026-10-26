@@ -57,6 +57,47 @@ function textoSobRects(folha: HTMLElement, rects: Rect[]) {
   return partes.join(" ").replace(/\s+/g, " ").trim();
 }
 
+function BarraLado({
+  nome,
+  aoAjustar,
+  aoOcultar,
+  aoDivisao,
+}: {
+  nome: "cadernão" | "painel";
+  aoAjustar: (delta: number) => void;
+  aoOcultar: () => void;
+  aoDivisao: (evento: React.PointerEvent<HTMLButtonElement>) => void;
+}) {
+  const titulo = nome === "cadernão" ? "Cadernão" : "Painel";
+  return (
+    <>
+      <button
+        type="button"
+        className="divisor-lado hidden lg:block"
+        aria-label={`Arraste para mudar o tamanho do PDF e do ${nome}`}
+        onPointerDown={aoDivisao}
+        onKeyDown={(evento) => {
+          if (evento.key !== "ArrowLeft" && evento.key !== "ArrowRight") return;
+          evento.preventDefault();
+          evento.stopPropagation();
+          aoAjustar(evento.key === "ArrowLeft" ? 40 : -40);
+        }}
+      />
+      <div className="mb-2 flex flex-wrap justify-end gap-2">
+        <button type="button" className="btn" onClick={() => aoAjustar(-140)}>
+          PDF maior
+        </button>
+        <button type="button" className="btn" onClick={() => aoAjustar(140)}>
+          {titulo} maior
+        </button>
+        <button type="button" className="btn" onClick={aoOcultar}>
+          Ocultar {nome}
+        </button>
+      </div>
+    </>
+  );
+}
+
 export function LeitorPdf({
   materiaId,
   pdfId,
@@ -99,6 +140,8 @@ export function LeitorPdf({
   const [colocandoPostit, setColocandoPostit] = useState(false);
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
+  const [larguraPainel, setLarguraPainel] = useState(400);
+  const [larguraCaderno, setLarguraCaderno] = useState(640);
   const [enunciado, setEnunciado] = useState("");
   const [resposta, setResposta] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -184,12 +227,14 @@ export function LeitorPdf({
     const palco = palcoRef.current;
     if (!palco || !documento) return;
     let quadro = 0;
+    let pedido = 0;
     let ativo = true;
     const medir = () => {
       if (!ativo || ajusteManual.current) return;
+      const atual = ++pedido;
       const largura = Math.max(280, palco.clientWidth - 32);
       void documento.getPage(paginaSegura).then((page) => {
-        if (!ativo || ajusteManual.current) {
+        if (!ativo || ajusteManual.current || atual !== pedido) {
           page.cleanup();
           return;
         }
@@ -492,6 +537,16 @@ export function LeitorPdf({
     void gravarGrifo(corMarca, extraido || `Página ${paginaSegura}`, [rect]);
   }
 
+  async function excluirBloco(blocoId: string) {
+    setErro(null);
+    try {
+      await repo.blocos.remover(blocoId);
+      setAviso("Bloco excluído. Os grifos e post-its continuam no PDF.");
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível excluir o bloco."));
+    }
+  }
+
   async function criarBloco(evento: React.FormEvent) {
     evento.preventDefault();
     setGuardando(true);
@@ -616,6 +671,36 @@ export function LeitorPdf({
     setEscala(Number(limitar(numero / 100, ZOOM_MIN, ZOOM_MAX).toFixed(2)));
   }
 
+  function alterarLado(delta: number) {
+    const maximo = Math.round(window.innerWidth * 0.75);
+    const aplicar = (atual: number) => limitar(atual + delta, 300, maximo);
+    if (painel === "caderno") setLarguraCaderno(aplicar);
+    if (painel === "anotacoes") setLarguraPainel(aplicar);
+  }
+
+  function iniciarDivisao(evento: React.PointerEvent<HTMLButtonElement>) {
+    if (painel === "oculto") return;
+    evento.preventDefault();
+    const inicioX = evento.clientX;
+    const inicio = painel === "caderno" ? larguraCaderno : larguraPainel;
+    const definir = painel === "caderno" ? setLarguraCaderno : setLarguraPainel;
+    try {
+      evento.currentTarget.setPointerCapture(evento.pointerId);
+    } catch {
+      /* o navegador recusa a captura fora de um ponteiro real */
+    }
+    function mover(ev: PointerEvent) {
+      const maximo = Math.round(window.innerWidth * 0.75);
+      definir(limitar(inicio + inicioX - ev.clientX, 300, maximo));
+    }
+    function soltar() {
+      window.removeEventListener("pointermove", mover);
+      window.removeEventListener("pointerup", soltar);
+    }
+    window.addEventListener("pointermove", mover);
+    window.addEventListener("pointerup", soltar);
+  }
+
   async function ajustar() {
     ajusteManual.current = false;
     const palco = palcoRef.current;
@@ -651,12 +736,9 @@ export function LeitorPdf({
       </div>
       <div
         className={`grid min-h-0 flex-1 ${
-          painel === "oculto"
-            ? "grid-cols-1"
-            : painel === "caderno"
-              ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)]"
-              : "lg:grid-cols-[minmax(0,1fr)_24rem]"
+          painel === "oculto" ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_var(--lado)]"
         }`}
+        style={{ "--lado": `${painel === "caderno" ? larguraCaderno : larguraPainel}px` } as React.CSSProperties}
       >
       <div className="flex min-w-0 flex-col lg:min-h-0">
         <div className="cartao mx-4 mb-3 px-3 py-3 sm:mx-5">
@@ -880,12 +962,27 @@ export function LeitorPdf({
       </div>
 
       {painel === "caderno" ? (
-        <aside className="flex min-h-[70vh] flex-col px-3 pb-4 lg:min-h-0 lg:overflow-hidden lg:pr-4" aria-label="Cadernão">
-          <Caderno materiaId={materiaId} pdfId={pdfId} aoLado={setPagina} />
+        <aside className="relative flex min-h-[70vh] flex-col px-3 pb-4 lg:min-h-0 lg:overflow-hidden lg:pr-4" aria-label="Cadernão">
+          <BarraLado
+            nome="cadernão"
+            aoAjustar={alterarLado}
+            aoOcultar={() => setPainel("oculto")}
+            aoDivisao={iniciarDivisao}
+          />
+          <div className="min-h-0 flex-1">
+            <Caderno materiaId={materiaId} pdfId={pdfId} aoLado={setPagina} />
+          </div>
         </aside>
       ) : null}
       {painel === "anotacoes" ? (
-      <aside className="flex flex-col gap-3 overflow-auto px-3 pb-4 lg:min-h-0 lg:pr-4" aria-label="Anotações da página">
+      <aside className="relative flex min-h-0 flex-col overflow-hidden px-3 pb-4 lg:pr-4" aria-label="Anotações da página">
+        <BarraLado
+          nome="painel"
+          aoAjustar={alterarLado}
+          aoOcultar={() => setPainel("oculto")}
+          aoDivisao={iniciarDivisao}
+        />
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
         {erro || aviso ? (
           <div className="px-4 pt-4">
             {erro ? <Aviso texto={erro} /> : null}
@@ -1147,18 +1244,29 @@ export function LeitorPdf({
             <ul className="mt-2 flex flex-col gap-2">
               {blocos.map((bloco) => (
                 <li key={bloco.id} className="flex items-start justify-between gap-2 rounded-xl bg-[#fbf8f4] px-3 py-2">
-                  <button type="button" className="text-left" onClick={() => setPagina(bloco.paginaInicio)}>
+                  <button type="button" className="min-w-0 text-left" onClick={() => setPagina(bloco.paginaInicio)}>
                     <span className="block font-medium">{bloco.titulo}</span>
                     <span className="text-sm text-muted">{descreverFaixa(bloco.paginaInicio, bloco.paginaFim)}</span>
                   </button>
-                  <Link className="text-sm text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, bloco.id)}>
-                    Pacote
-                  </Link>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Link className="text-sm text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, bloco.id)}>
+                      Pacote
+                    </Link>
+                    <Confirmar
+                      rotulo="Excluir"
+                      confirmar="Excluir bloco"
+                      onConfirmar={() => {
+                        if (blocoAtual?.id === bloco.id) questoesDialogo.current?.close();
+                        return excluirBloco(bloco.id);
+                      }}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </section>
+        </div>
       </aside>
       ) : null}
 
