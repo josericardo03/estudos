@@ -51,6 +51,7 @@ export function Caderno({
 }) {
   const [filtro, setFiltro] = useState<Prioridade | "todas">("todas");
   const [erro, setErro] = useState<string | null>(null);
+  const [baixando, setBaixando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
     const [materia, pdf, blocos, grifos, postits] = await Promise.all([
       repo.materias.obter(materiaId),
@@ -68,28 +69,66 @@ export function Caderno({
   if (!dados) {
     return <NaoEncontrado titulo="Cadernão não encontrado" detalhe="O PDF não está nesta matéria." />;
   }
+  const caderno = dados;
 
   const grifos = dados.grifos.filter((grifo) => filtro === "todas" || grifo.cor === filtro);
-  const secoes = [
-    ...dados.blocos.map((bloco) => ({
-      id: bloco.id,
-      titulo: bloco.titulo,
-      detalhe: descreverFaixa(bloco.paginaInicio, bloco.paginaFim),
-      href: caminhoBloco(materiaId, pdfId, bloco.id),
-      pagina: bloco.paginaInicio,
-      grifos: grifos.filter((grifo) => grifo.blocoId === bloco.id),
-      postits: dados.postits.filter((postit) => postit.blocoId === bloco.id),
-    })),
-    {
-      id: "soltos",
-      titulo: "Sem bloco",
-      detalhe: "Anotações em páginas que ainda não entraram numa faixa.",
-      href: null as string | null,
-      pagina: null as number | null,
-      grifos: grifos.filter((grifo) => !grifo.blocoId),
-      postits: dados.postits.filter((postit) => !postit.blocoId),
-    },
-  ].filter((secao) => secao.id !== "soltos" || secao.grifos.length > 0 || secao.postits.length > 0);
+
+  function montarSecoes(listaGrifos: Grifo[], listaPostits: PostIt[]) {
+    return [
+      ...caderno.blocos.map((bloco) => ({
+        id: bloco.id,
+        titulo: bloco.titulo,
+        detalhe: descreverFaixa(bloco.paginaInicio, bloco.paginaFim),
+        href: caminhoBloco(materiaId, pdfId, bloco.id),
+        pagina: bloco.paginaInicio,
+        grifos: listaGrifos.filter((grifo) => grifo.blocoId === bloco.id),
+        postits: listaPostits.filter((postit) => postit.blocoId === bloco.id),
+      })),
+      {
+        id: "soltos",
+        titulo: "Sem bloco",
+        detalhe: "Anotações em páginas que ainda não entraram numa faixa.",
+        href: null as string | null,
+        pagina: null as number | null,
+        grifos: listaGrifos.filter((grifo) => !grifo.blocoId),
+        postits: listaPostits.filter((postit) => !postit.blocoId),
+      },
+    ].filter((secao) => secao.id !== "soltos" || secao.grifos.length > 0 || secao.postits.length > 0);
+  }
+
+  const secoes = montarSecoes(grifos, dados.postits);
+
+  async function baixar() {
+    setErro(null);
+    const secoesPdf = montarSecoes(caderno.grifos, caderno.postits).filter(
+      (secao) => secao.grifos.length > 0 || secao.postits.length > 0,
+    );
+    if (!secoesPdf.length) {
+      setErro("Não há grifos nem post-its para baixar.");
+      return;
+    }
+    setBaixando(true);
+    try {
+      const { baixarPdfCaderno } = await import("@/lib/cadernoPdf");
+      await baixarPdfCaderno({
+        materia: caderno.materia.nome,
+        arquivo: caderno.pdf.nome,
+        secoes: secoesPdf.map((secao) => ({
+          titulo: secao.titulo,
+          detalhe: secao.detalhe,
+          itens: ordenarAnotacoes(secao.grifos, secao.postits).map((item) =>
+            item.tipo === "grifo"
+              ? { tipo: "grifo" as const, cor: item.grifo.cor, pagina: item.grifo.pagina, texto: item.grifo.texto }
+              : { tipo: "postit" as const, pagina: item.postit.pagina, texto: item.postit.texto },
+          ),
+        })),
+      });
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível baixar o cadernão."));
+    } finally {
+      setBaixando(false);
+    }
+  }
 
   async function apagarGrifo(id: string) {
     setErro(null);
@@ -113,6 +152,9 @@ export function Caderno({
         onClick={() => setFiltro("todas")}
       >
         Todas
+      </button>
+      <button type="button" className="btn" onClick={() => void baixar()} disabled={baixando}>
+        {baixando ? "Baixando…" : "Baixar PDF"}
       </button>
       {PRIORIDADES.map((item) => (
         <button

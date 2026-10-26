@@ -887,19 +887,20 @@ export function LeitorPdf({
                   if (evento.button !== 0) return;
                   const camada = textoRef.current;
                   if (!camada) return;
+                  const camadaEl = camada;
                   const inicioX = evento.clientX;
                   const inicioY = evento.clientY;
                   let arrastou = false;
                   function mover(ev: MouseEvent) {
                     if (Math.hypot(ev.clientX - inicioX, ev.clientY - inicioY) <= 4) return;
                     arrastou = true;
-                    camada.classList.add("selecting");
+                    camadaEl.classList.add("selecting");
                   }
                   function soltar() {
                     window.removeEventListener("mousemove", mover);
                     window.removeEventListener("mouseup", soltar);
                     if (arrastou) return;
-                    camada.classList.remove("selecting");
+                    camadaEl.classList.remove("selecting");
                     window.getSelection()?.removeAllRanges();
                     setSelecao(null);
                   }
