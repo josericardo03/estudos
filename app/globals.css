@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  --header-h: calc(4rem + env(safe-area-inset-top, 0px));
   --paper: #f3f0e8;
   --sheet: #ffffff;
   --ink: #1c241f;
@@ -42,6 +43,11 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-outfit), sans-serif;
+  overflow-x: clip;
+}
+
+main {
+  overflow-wrap: break-word;
 }
 
 ::selection {
@@ -594,4 +600,62 @@ a.citacao {
 
 .textLayer.selecting .endOfContent {
   top: 0;
+}
+
+.nav-rolagem {
+  scrollbar-width: none;
+}
+
+.nav-rolagem::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .nav-link {
+    padding: 0.35rem 0.55rem;
+  }
+
+  main.mx-auto {
+    padding-top: 1.75rem;
+    padding-bottom: max(2rem, env(safe-area-inset-bottom, 0px));
+  }
+
+  main h1.font-serif {
+    font-size: 2.15rem;
+    line-height: 1.15;
+  }
+
+  main h2.font-serif {
+    font-size: 1.55rem;
+    line-height: 1.25;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 1023px) {
+  button.btn.so-largo {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .btn {
+    min-height: 2.75rem;
+  }
+
+  .nav-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+  }
+
+  input[type="checkbox"] {
+    width: 1.15rem;
+    height: 1.15rem;
+  }
 }

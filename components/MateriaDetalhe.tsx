@@ -138,8 +138,8 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
           <ul className="mt-4 divide-y divide-line border-y border-line">
             {dados.pdfs.map(({ pdf, blocos }) => (
               <li key={pdf.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <Link href={caminhoPdf(materiaId, pdf.id)} className="font-serif text-2xl text-ink no-underline hover:underline">
+                <div className="min-w-0 flex-1">
+                  <Link href={caminhoPdf(materiaId, pdf.id)} className="break-words font-serif text-2xl text-ink no-underline hover:underline">
                     {pdf.nome}
                   </Link>
                   <p className="mt-1 text-sm text-muted">

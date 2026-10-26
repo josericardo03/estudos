@@ -23,7 +23,7 @@ function LinhaGrupo({ grupo }: { grupo: GrupoDesempenho }) {
     <li className="border-t border-line py-4 first:border-t-0 first:pt-0">
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <Link href={grupo.href} className="font-medium text-ink no-underline hover:underline">
+          <Link href={grupo.href} className="break-words font-medium text-ink no-underline hover:underline">
             {grupo.nome}
           </Link>
           <p className="mt-1 text-sm text-muted">{grupo.detalhe}</p>
@@ -155,7 +155,7 @@ export function Desempenho() {
             {dados.questoes.map((questao) => (
               <li key={questao.id} className="cartao p-4">
                 <div className="flex items-baseline justify-between gap-3">
-                  <p className="text-sm text-muted">{questao.detalhe}</p>
+                  <p className="min-w-0 break-words text-sm text-muted">{questao.detalhe}</p>
                   <p className="shrink-0 font-serif text-2xl" style={{ color: corDaTaxa(questao.taxa) }}>
                     {porcentagem(questao.taxa)}%
                   </p>

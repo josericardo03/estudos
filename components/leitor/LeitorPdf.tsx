@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { mensagemErro, mensagemPdf } from "@/lib/erros";
 import { blocoDaPagina, descreverFaixa } from "@/lib/faixa";
 import { abrirDocumento, carregarPdfjs, escalaCss, type DocumentoPdf } from "@/lib/pdf";
@@ -65,6 +65,22 @@ function caixaEnvolvente(rects: Rect[], folga: number): Rect {
   return { x, y, w: direita - x, h: baixo - y };
 }
 
+function telaEstreita() {
+  return window.matchMedia("(max-width: 767px)").matches;
+}
+
+function useTelaEstreita() {
+  return useSyncExternalStore(
+    (avisar) => {
+      const consulta = window.matchMedia("(max-width: 767px)");
+      consulta.addEventListener("change", avisar);
+      return () => consulta.removeEventListener("change", avisar);
+    },
+    telaEstreita,
+    () => false,
+  );
+}
+
 function recortarCanvas(canvas: HTMLCanvasElement, rect: Rect) {
   const sx = Math.round(rect.x * canvas.width);
   const sy = Math.round(rect.y * canvas.height);
@@ -108,10 +124,10 @@ function BarraLado({
         }}
       />
       <div className="mb-2 flex flex-wrap justify-end gap-2">
-        <button type="button" className="btn" onClick={() => aoAjustar(-140)}>
+        <button type="button" className="btn so-largo" onClick={() => aoAjustar(-140)}>
           PDF maior
         </button>
-        <button type="button" className="btn" onClick={() => aoAjustar(140)}>
+        <button type="button" className="btn so-largo" onClick={() => aoAjustar(140)}>
           {titulo} maior
         </button>
         <button type="button" className="btn" onClick={aoOcultar}>
@@ -168,6 +184,12 @@ export function LeitorPdf({
   const [colocandoPostit, setColocandoPostit] = useState(false);
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
+  const estreita = useTelaEstreita();
+  const [abriuNoCelular, setAbriuNoCelular] = useState(false);
+  if (estreita && !abriuNoCelular) {
+    setAbriuNoCelular(true);
+    if (painel === "anotacoes") setPainel("oculto");
+  }
   const [larguraPainel, setLarguraPainel] = useState(400);
   const [larguraCaderno, setLarguraCaderno] = useState(640);
   const [enunciado, setEnunciado] = useState("");
@@ -784,16 +806,16 @@ export function LeitorPdf({
   }
 
   return (
-    <div className="flex h-[calc(100dvh-4rem)] flex-col bg-paper">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link href={caminhoMateria(materiaId)} className="selo selo-pine shrink-0 rounded-full no-underline">
-            {materia?.nome ?? "Matéria"}
+    <div className="flex h-[calc(100dvh-var(--header-h))] min-h-0 flex-col overflow-hidden bg-paper">
+      <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <Link href={caminhoMateria(materiaId)} className="selo selo-pine max-w-[42vw] shrink overflow-hidden rounded-full no-underline sm:max-w-52">
+            <span className="min-w-0 truncate">{materia?.nome ?? "Matéria"}</span>
           </Link>
           <h1 className="min-w-0 truncate font-serif text-xl">{arquivo.nome}</h1>
           {painel === "caderno" ? <span className="selo hidden rounded-full sm:inline-flex">PDF interativo</span> : null}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2" role="group" aria-label="O que fica ao lado do PDF">
+        <div className="flex w-full flex-wrap gap-2 sm:w-auto" role="group" aria-label="O que fica ao lado do PDF">
           <button type="button" className="btn btn-seletor" aria-pressed={painel === "oculto"} onClick={() => setPainel("oculto")}>
             Só o PDF
           </button>
@@ -807,19 +829,22 @@ export function LeitorPdf({
       </div>
       <div
         className={`grid min-h-0 flex-1 ${
-          painel === "oculto" ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_var(--lado)]"
+          painel === "oculto"
+            ? "grid-cols-1"
+            : "grid-cols-1 md:grid-cols-[minmax(0,1.15fr)_minmax(220px,0.85fr)] lg:grid-cols-[minmax(0,1fr)_minmax(280px,var(--lado))]"
         }`}
         style={{ "--lado": `${painel === "caderno" ? larguraCaderno : larguraPainel}px` } as React.CSSProperties}
       >
-      <div className="flex min-w-0 flex-col lg:min-h-0">
-        <div className="cartao mx-4 mb-3 px-3 py-3 sm:mx-5">
+      <div className={`flex h-full min-h-0 min-w-0 flex-col ${painel !== "oculto" ? "max-md:hidden" : ""}`}>
+        <div className="cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <label className="sr-only" htmlFor="numero-pagina">
                 Página
               </label>
-              <button type="button" className="btn" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
-                ← Anterior
+              <button type="button" className="btn" aria-label="Página anterior" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
+                <span aria-hidden>←</span>
+                <span className="hidden sm:inline">Anterior</span>
               </button>
               <input
                 id="numero-pagina"
@@ -834,8 +859,9 @@ export function LeitorPdf({
                 }}
               />
               <span className="text-sm text-muted">/ {total}</span>
-              <button type="button" className="btn" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
-                Próxima →
+              <button type="button" className="btn" aria-label="Próxima página" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
+                <span className="hidden sm:inline">Próxima</span>
+                <span aria-hidden>→</span>
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -920,9 +946,16 @@ export function LeitorPdf({
                 {IMPORTANTE.nome}
               </button>
             </div>
-            <span className="atalho ml-auto">Ctrl+Z</span>
+            <span className="atalho ml-auto hidden sm:inline">Ctrl+Z</span>
           </div>
-          <p className="mt-2 text-sm text-muted">
+          <p className="mt-2 text-sm text-muted sm:hidden">
+            {corMarca === IMPORTANTE.id
+              ? "Arraste um quadrado. A área vai para o cadernão."
+              : corMarca
+                ? "Arraste na página para grifar. Toque de novo na cor para soltar."
+                : "Escolha uma cor e arraste, ou selecione o texto."}
+          </p>
+          <p className="mt-2 hidden text-sm text-muted sm:block">
               {corMarca === IMPORTANTE.id
                 ? "Arraste um quadrado em volta do trecho ou da figura. A área vai como imagem para o cadernão. Clique de novo, ou Esc, para soltar."
                 : corMarca
@@ -933,7 +966,7 @@ export function LeitorPdf({
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
         <div
           ref={palcoRef}
-          className="flex min-h-[70vh] flex-1 justify-center overflow-auto px-4 pb-4 sm:px-5"
+          className="flex min-h-0 flex-1 justify-center overflow-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5"
         >
           {documento ? (
             <div
@@ -1063,7 +1096,7 @@ export function LeitorPdf({
       </div>
 
       {painel === "caderno" ? (
-        <aside className="relative flex min-h-[70vh] flex-col px-3 pb-4 lg:min-h-0 lg:overflow-hidden lg:pr-4" aria-label="Cadernão">
+        <aside className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-3 md:pr-4" aria-label="Cadernão">
           <BarraLado
             nome="cadernão"
             aoAjustar={alterarLado}
@@ -1076,7 +1109,7 @@ export function LeitorPdf({
         </aside>
       ) : null}
       {painel === "anotacoes" ? (
-      <aside className="relative flex min-h-0 flex-col overflow-hidden px-3 pb-4 lg:pr-4" aria-label="Anotações da página">
+      <aside className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-3 md:pr-4" aria-label="Anotações da página">
         <BarraLado
           nome="painel"
           aoAjustar={alterarLado}
@@ -1395,10 +1428,10 @@ export function LeitorPdf({
           onClose={() => setEditandoQuestao(null)}
         >
           <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-            <h2 id="titulo-popup-questoes" className="font-serif text-2xl">
+            <h2 id="titulo-popup-questoes" className="min-w-0 break-words font-serif text-xl sm:text-2xl">
               {blocoAtual.titulo}
             </h2>
-            <button type="button" className="btn" onClick={() => questoesDialogo.current?.close()}>
+            <button type="button" className="btn shrink-0" onClick={() => questoesDialogo.current?.close()}>
               Fechar
             </button>
           </div>

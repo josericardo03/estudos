@@ -28,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="pt-BR" className={`${outfit.variable} ${fraunces.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
-        <Suspense fallback={<div className="h-16 border-b border-line" />}>
+        <Suspense fallback={<div className="border-b border-line" style={{ height: "var(--header-h)" }} />}>
           <Cabecalho />
         </Suspense>
         <div className="flex-1">{children}</div>
