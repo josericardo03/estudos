@@ -1,7 +1,6 @@
-// As telas só conversam com este módulo. A troca para o Supabase
-// acontece aqui, no formato de supabase/migrations/001_init.sql.
-// Enquanto as variáveis do Supabase estiverem vazias, os dados ficam
-// no IndexedDB deste navegador (lib/db.ts).
+// As telas só conversam com este módulo. O banco do Supabase está em
+// supabase/schema.sql. Enquanto as variáveis do Supabase estiverem vazias,
+// os dados ficam no IndexedDB deste navegador (lib/db.ts).
 
 import { getDb } from "./db";
 import { ErroEstudo } from "./erros";
