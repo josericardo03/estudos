@@ -118,9 +118,11 @@ export function Caderno({
         <button
           key={item.id}
           type="button"
-          className={`btn ${filtro === item.id ? `btn-cor-${item.id}` : ""}`}
+          className="btn btn-cor"
+          aria-pressed={filtro === item.id}
           onClick={() => setFiltro(item.id)}
         >
+          <span className={`ponto ponto-${item.id}`} aria-hidden />
           {item.nome}
         </button>
       ))}
@@ -133,18 +135,24 @@ export function Caderno({
         Este PDF ainda não tem grifos nem post-its. Abra o leitor, selecione um trecho e escolha a prioridade.
       </p>
     ) : (
-      <div className={aoLado ? "flex flex-col gap-4" : "mt-8 flex flex-col gap-8"}>
-        {secoes.map((secao) => (
-          <section key={secao.id} className={aoLado ? "border border-line px-3 py-3" : "border border-line bg-sheet px-4 py-5 sm:px-6"}>
+      <div className={aoLado ? "flex flex-col gap-5" : "mt-8 flex flex-col gap-8"}>
+        {secoes.map((secao) => {
+          const totalNotas = secao.grifos.length + secao.postits.length;
+          return (
+          <section key={secao.id} className={aoLado ? "" : "cartao px-4 py-5 sm:px-6"}>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className={aoLado ? "font-serif text-2xl" : "font-serif text-3xl"}>{secao.titulo}</h2>
+              <div>
+                <h2 className={aoLado ? "font-serif text-2xl" : "font-serif text-3xl"}>{secao.titulo}</h2>
+                <p className="mt-1 text-sm text-muted">
+                  {secao.detalhe} · {totalNotas} {totalNotas === 1 ? "anotação registrada" : "anotações registradas"}
+                </p>
+              </div>
               {secao.href ? (
                 <Link href={secao.href} className="text-sm text-pine no-underline hover:underline">
                   Abrir bloco
                 </Link>
               ) : null}
             </div>
-            <p className="mt-1 text-sm text-muted">{secao.detalhe}</p>
             {ordenarAnotacoes(secao.grifos, secao.postits).length === 0 ? (
               <p className="mt-4 text-sm text-muted">Nenhum grifo nesta prioridade.</p>
             ) : (
@@ -171,16 +179,17 @@ export function Caderno({
               </div>
             )}
           </section>
-        ))}
+          );
+        })}
       </div>
     );
 
   if (aoLado) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="shrink-0 border-b border-line px-4 py-3">
+      <div className="cartao flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-line px-4 py-4">
           <div className="flex items-baseline justify-between gap-2">
-            <h2 className="font-serif text-2xl">Cadernão</h2>
+            <h2 className="font-serif text-3xl">Cadernão</h2>
             <Link href={caminhoCaderno(materiaId, pdfId)} className="text-sm text-pine no-underline hover:underline">
               Página inteira
             </Link>

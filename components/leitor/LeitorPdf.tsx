@@ -27,12 +27,15 @@ function cancelado(erro: unknown) {
   );
 }
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+
 function limitar(valor: number, minimo: number, maximo: number) {
   return Math.min(maximo, Math.max(minimo, valor));
 }
 
-function textoDaCamada(folha: HTMLElement) {
-  return (folha.querySelector(".textLayer")?.textContent ?? "").replace(/\s+/g, " ").trim();
+function porcentagemZoom(escala: number) {
+  return String(Math.round(escala * 100));
 }
 
 function textoSobRects(folha: HTMLElement, rects: Rect[]) {
@@ -81,6 +84,7 @@ export function LeitorPdf({
   const [pagina, setPagina] = useState(() => Math.max(1, paginaInicial || 1));
   const [origem, setOrigem] = useState(paginaInicial);
   const [escala, setEscala] = useState(1);
+  const [zoomRascunho, setZoomRascunho] = useState<string | null>(null);
   const [medida, setMedida] = useState<Medida | null>(null);
   const [pronta, setPronta] = useState(false);
   const [temTexto, setTemTexto] = useState(true);
@@ -185,12 +189,12 @@ export function LeitorPdf({
       if (!ativo || ajusteManual.current) return;
       const largura = Math.max(280, palco.clientWidth - 32);
       void documento.getPage(paginaSegura).then((page) => {
-        if (!ativo) {
+        if (!ativo || ajusteManual.current) {
           page.cleanup();
           return;
         }
         const base = page.getViewport({ scale: escalaCss(1) });
-        const proxima = Number(Math.min(1.8, Math.max(0.55, largura / base.width)).toFixed(2));
+        const proxima = Number(limitar(largura / base.width, ZOOM_MIN, 1.8).toFixed(2));
         page.cleanup();
         setEscala((atual) => (Math.abs(atual - proxima) < 0.01 ? atual : proxima));
       });
@@ -414,29 +418,22 @@ export function LeitorPdf({
     setSelecao(null);
   }
 
-  async function marcarPagina(cor: Prioridade) {
-    const jaMarcada = grifosDaPagina.some(
-      (grifo) => grifo.cor === cor && grifo.rects.some((rect) => rect.h > 0.9 && rect.w < 0.05),
-    );
-    setCorMarca(cor);
-    if (jaMarcada) {
-      setErro(null);
-      setAviso("Esta página já tem essa cor. Arraste no PDF para grifar uma área.");
-      return;
-    }
-    const folha = folhaRef.current;
-    const trecho = folha ? textoDaCamada(folha).slice(0, 220) : "";
-    const texto = trecho ? `Página ${paginaSegura}. ${trecho}` : `Página ${paginaSegura}`;
-    await gravarGrifo(cor, texto, [{ x: 0, y: 0, w: 0.03, h: 1 }]);
-  }
-
   function escolherCor(cor: Prioridade) {
     setColocandoPostit(false);
     if (selecao) {
       void grifar(cor);
       return;
     }
-    void marcarPagina(cor);
+    if (corMarca === cor) {
+      setCorMarca(null);
+      setTraco(null);
+      origemMarca.current = null;
+      setAviso(null);
+      return;
+    }
+    setCorMarca(cor);
+    setErro(null);
+    setAviso(null);
   }
 
   function pontoNaFolha(evento: React.PointerEvent<HTMLDivElement>) {
@@ -483,15 +480,13 @@ export function LeitorPdf({
     if (!origem || !ponto || !corMarca) return;
     const w = Math.abs(ponto.x - origem.x);
     const h = Math.abs(ponto.y - origem.y);
-    const rect =
-      w < 0.012 && h < 0.012
-        ? { x: 0.06, y: limitar(origem.y - 0.014, 0, 0.96), w: 0.88, h: 0.03 }
-        : {
-            x: Math.min(origem.x, ponto.x),
-            y: Math.min(origem.y, ponto.y),
-            w: Math.max(w, 0.01),
-            h: Math.max(h, 0.012),
-          };
+    if (w < 0.012 && h < 0.012) return;
+    const rect = {
+      x: Math.min(origem.x, ponto.x),
+      y: Math.min(origem.y, ponto.y),
+      w: Math.max(w, 0.01),
+      h: Math.max(h, 0.012),
+    };
     const folha = folhaRef.current;
     const extraido = folha ? textoSobRects(folha, [rect]).slice(0, 280) : "";
     void gravarGrifo(corMarca, extraido || `Página ${paginaSegura}`, [rect]);
@@ -611,6 +606,16 @@ export function LeitorPdf({
     window.addEventListener("pointerup", soltar);
   }
 
+  function aplicarZoom(texto: string) {
+    const limpo = texto.replace("%", "").replace(",", ".").trim();
+    setZoomRascunho(null);
+    if (!limpo) return;
+    const numero = Number(limpo);
+    if (!Number.isFinite(numero)) return;
+    ajusteManual.current = true;
+    setEscala(Number(limitar(numero / 100, ZOOM_MIN, ZOOM_MAX).toFixed(2)));
+  }
+
   async function ajustar() {
     ajusteManual.current = false;
     const palco = palcoRef.current;
@@ -618,114 +623,152 @@ export function LeitorPdf({
     const page = await documento.getPage(paginaSegura);
     const base = page.getViewport({ scale: escalaCss(1) });
     const largura = Math.max(280, palco.clientWidth - 32);
-    setEscala(Number(Math.min(1.8, Math.max(0.55, largura / base.width)).toFixed(2)));
+    setEscala(Number(limitar(largura / base.width, ZOOM_MIN, 1.8).toFixed(2)));
     page.cleanup();
   }
 
   return (
-    <div
-      className={`lg:grid lg:h-[calc(100dvh-4rem)] ${
-        painel === "oculto"
-          ? "lg:grid-cols-1"
-          : painel === "caderno"
-            ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)]"
-            : "lg:grid-cols-[minmax(0,1fr)_24rem]"
-      }`}
-    >
+    <div className="flex h-[calc(100dvh-4rem)] flex-col bg-paper">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href={caminhoMateria(materiaId)} className="selo selo-pine shrink-0 rounded-full no-underline">
+            {materia?.nome ?? "Matéria"}
+          </Link>
+          <h1 className="min-w-0 truncate font-serif text-xl">{arquivo.nome}</h1>
+          {painel === "caderno" ? <span className="selo hidden rounded-full sm:inline-flex">PDF interativo</span> : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2" role="group" aria-label="O que fica ao lado do PDF">
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "oculto"} onClick={() => setPainel("oculto")}>
+            Só o PDF
+          </button>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "anotacoes"} onClick={() => setPainel("anotacoes")}>
+            Painel
+          </button>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "caderno"} onClick={() => setPainel("caderno")}>
+            Cadernão
+          </button>
+        </div>
+      </div>
+      <div
+        className={`grid min-h-0 flex-1 ${
+          painel === "oculto"
+            ? "grid-cols-1"
+            : painel === "caderno"
+              ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,32rem)]"
+              : "lg:grid-cols-[minmax(0,1fr)_24rem]"
+        }`}
+      >
       <div className="flex min-w-0 flex-col lg:min-h-0">
-        <div className="sticky top-0 z-20 border-b border-line bg-sheet">
-          <div className="flex flex-wrap items-center gap-2 px-4 py-2">
-            <Link href={caminhoMateria(materiaId)} className="shrink-0 text-sm text-pine no-underline hover:underline">
-              {materia?.nome ?? "Matéria"}
-            </Link>
-            <h1 className="min-w-0 flex-1 truncate font-serif text-xl">{arquivo.nome}</h1>
-            <div className="flex shrink-0 flex-wrap gap-2" role="group" aria-label="O que fica ao lado do PDF">
-              <button type="button" className="btn" aria-pressed={painel === "oculto"} onClick={() => setPainel("oculto")}>
-                Só o PDF
+        <div className="cartao mx-4 mb-3 px-3 py-3 sm:mx-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="sr-only" htmlFor="numero-pagina">
+                Página
+              </label>
+              <button type="button" className="btn" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
+                ← Anterior
               </button>
-              <button type="button" className="btn" aria-pressed={painel === "anotacoes"} onClick={() => setPainel("anotacoes")}>
-                Painel
+              <input
+                id="numero-pagina"
+                className="campo campo-pagina"
+                type="number"
+                min={1}
+                max={total}
+                value={paginaSegura}
+                onChange={(evento) => {
+                  const valor = Number(evento.target.value);
+                  if (Number.isInteger(valor)) setPagina(valor);
+                }}
+              />
+              <span className="text-sm text-muted">/ {total}</span>
+              <button type="button" className="btn" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
+                Próxima →
               </button>
-              <button type="button" className="btn" aria-pressed={painel === "caderno"} onClick={() => setPainel("caderno")}>
-                Cadernão
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  ajusteManual.current = true;
+                  setEscala((atual) => Number(Math.max(ZOOM_MIN, atual - 0.15).toFixed(2)));
+                }}
+              >
+                −
+              </button>
+              <label className="sr-only" htmlFor="zoom-pdf">
+                Zoom
+              </label>
+              <input
+                id="zoom-pdf"
+                className="campo campo-zoom"
+                inputMode="numeric"
+                aria-describedby="zoom-unidade"
+                value={zoomRascunho ?? porcentagemZoom(escala)}
+                onFocus={(evento) => {
+                  setZoomRascunho(porcentagemZoom(escala));
+                  evento.target.select();
+                }}
+                onChange={(evento) => setZoomRascunho(evento.target.value)}
+                onBlur={(evento) => {
+                  if (evento.target instanceof HTMLInputElement) aplicarZoom(evento.target.value);
+                }}
+                onKeyDown={(evento) => {
+                  if (evento.key !== "Enter") return;
+                  evento.preventDefault();
+                  aplicarZoom(evento.currentTarget.value);
+                  evento.currentTarget.blur();
+                }}
+              />
+              <span id="zoom-unidade" className="text-sm text-muted">
+                %
+              </span>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  ajusteManual.current = true;
+                  setEscala((atual) => Number(Math.min(ZOOM_MAX, atual + 0.15).toFixed(2)));
+                }}
+              >
+                +
+              </button>
+              <button type="button" className="btn" onClick={() => void ajustar()}>
+                Ajustar
               </button>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-2">
-            <label className="sr-only" htmlFor="numero-pagina">
-              Página
-            </label>
-            <button type="button" className="btn" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
-              Anterior
-            </button>
-            <input
-              id="numero-pagina"
-              className="campo w-16"
-              type="number"
-              min={1}
-              max={total}
-              value={paginaSegura}
-              onChange={(evento) => {
-                const valor = Number(evento.target.value);
-                if (Number.isInteger(valor)) setPagina(valor);
-              }}
-            />
-            <span className="text-sm text-muted">/ {total}</span>
-            <button type="button" className="btn" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
-              Próxima
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                ajusteManual.current = true;
-                setEscala((atual) => Number(Math.max(0.55, atual - 0.15).toFixed(2)));
-              }}
-            >
-              −
-            </button>
-            <span className="w-12 text-center text-sm">{Math.round(escala * 100)}%</span>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                ajusteManual.current = true;
-                setEscala((atual) => Number(Math.min(1.8, atual + 0.15).toFixed(2)));
-              }}
-            >
-              +
-            </button>
-            <button type="button" className="btn" onClick={() => void ajustar()}>
-              Ajustar
-            </button>
-            <span className="ml-1 text-sm text-muted" id="rotulo-marcar">
-              Marcar
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+            <span className="text-xs tracking-wider text-muted" id="rotulo-marcar">
+              MARCAR
             </span>
             <div className="flex flex-wrap gap-2" role="group" aria-labelledby="rotulo-marcar">
               {PRIORIDADES.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  className={`btn btn-cor-${item.id}`}
+                  className="btn btn-cor"
                   aria-pressed={corMarca === item.id}
                   onMouseDown={(evento) => evento.preventDefault()}
                   onClick={() => escolherCor(item.id)}
                 >
+                  <span className={`ponto ponto-${item.id}`} aria-hidden />
                   {item.nome}
                 </button>
               ))}
             </div>
-            <p className="basis-full text-sm text-muted">
-              {corMarca
-                ? "Arraste na página para grifar uma área, sem selecionar o texto. Esc solta a cor. Ctrl+Z desfaz a última marcação."
-                : "Clique numa cor para marcar a página. Se houver trecho selecionado, a cor grifa o trecho. Ctrl+Z desfaz a última marcação."}
-            </p>
+            <span className="atalho ml-auto">Ctrl+Z</span>
           </div>
+          <p className="mt-2 text-sm text-muted">
+              {corMarca
+                ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
+                : "Clique numa cor e arraste na página. Se houver trecho selecionado, a cor grifa o trecho. Ctrl+Z desfaz a última marcação."}
+          </p>
         </div>
-        {erroLeitura ? <div className="px-4 py-3"><Aviso texto={erroLeitura} /></div> : null}
+        {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
         <div
           ref={palcoRef}
-          className="flex min-h-[70vh] flex-1 justify-center overflow-auto bg-[#e7dccb] p-4"
+          className="flex min-h-[70vh] flex-1 justify-center overflow-auto px-4 pb-4 sm:px-5"
         >
           {documento ? (
             <div
@@ -758,7 +801,29 @@ export function LeitorPdf({
               <div
                 ref={textoRef}
                 className="textLayer"
-                onMouseDown={() => textoRef.current?.classList.add("selecting")}
+                onMouseDown={(evento) => {
+                  if (evento.button !== 0) return;
+                  const camada = textoRef.current;
+                  if (!camada) return;
+                  const inicioX = evento.clientX;
+                  const inicioY = evento.clientY;
+                  let arrastou = false;
+                  function mover(ev: MouseEvent) {
+                    if (Math.hypot(ev.clientX - inicioX, ev.clientY - inicioY) <= 4) return;
+                    arrastou = true;
+                    camada.classList.add("selecting");
+                  }
+                  function soltar() {
+                    window.removeEventListener("mousemove", mover);
+                    window.removeEventListener("mouseup", soltar);
+                    if (arrastou) return;
+                    camada.classList.remove("selecting");
+                    window.getSelection()?.removeAllRanges();
+                    setSelecao(null);
+                  }
+                  window.addEventListener("mousemove", mover);
+                  window.addEventListener("mouseup", soltar);
+                }}
               />
               {colocandoPostit ? (
                 <div
@@ -815,28 +880,32 @@ export function LeitorPdf({
       </div>
 
       {painel === "caderno" ? (
-        <aside className="flex min-h-[70vh] flex-col border-t border-line bg-sheet lg:min-h-0 lg:overflow-hidden lg:border-t-0 lg:border-l" aria-label="Cadernão">
+        <aside className="flex min-h-[70vh] flex-col px-3 pb-4 lg:min-h-0 lg:overflow-hidden lg:pr-4" aria-label="Cadernão">
           <Caderno materiaId={materiaId} pdfId={pdfId} aoLado={setPagina} />
         </aside>
       ) : null}
       {painel === "anotacoes" ? (
-      <aside className="flex flex-col border-t border-line bg-sheet lg:min-h-0 lg:border-t-0 lg:border-l" aria-label="Anotações da página">
+      <aside className="flex flex-col gap-3 overflow-auto px-3 pb-4 lg:min-h-0 lg:pr-4" aria-label="Anotações da página">
         {erro || aviso ? (
           <div className="px-4 pt-4">
             {erro ? <Aviso texto={erro} /> : null}
             {aviso ? <p className="text-sm text-pine">{aviso}</p> : null}
           </div>
         ) : null}
-        <section className="shrink-0 overflow-auto border-b border-line px-4 py-4 lg:max-h-[min(28rem,62%)]">
-          <h2 className="font-serif text-2xl">Questões do bloco</h2>
-          {blocoAtual ? (
-            <>
-              <p className="mt-1 text-sm text-muted">
-                {blocoAtual.titulo} · {questoesDoBloco.length}/{MAX_QUESTOES}
-              </p>
+        <section className="cartao shrink-0 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-serif text-2xl">Questões do bloco</h2>
+              {blocoAtual ? (
+                <p className="mt-1 text-sm text-muted">
+                  {descreverFaixa(blocoAtual.paginaInicio, blocoAtual.paginaFim)} · {questoesDoBloco.length}/{MAX_QUESTOES}
+                </p>
+              ) : null}
+            </div>
+            {blocoAtual ? (
               <button
                 type="button"
-                className="btn mt-3"
+                className="btn shrink-0"
                 onClick={() => {
                   setEditandoQuestao(null);
                   const dialogo = questoesDialogo.current;
@@ -845,6 +914,10 @@ export function LeitorPdf({
               >
                 Ver questões ({questoesDoBloco.length})
               </button>
+            ) : null}
+          </div>
+          {blocoAtual ? (
+            <>
               {questoesDoBloco.length >= MAX_QUESTOES ? (
                 <p className="mt-3 text-sm">Este bloco já tem 15 questões.</p>
               ) : (
@@ -856,6 +929,7 @@ export function LeitorPdf({
                     <textarea
                       id="enunciado-leitor"
                       className="campo min-h-20"
+                      placeholder="Digite ou cole aqui a questão para fixação mnêmica..."
                       value={enunciado}
                       onChange={(evento) => setEnunciado(evento.target.value)}
                       autoComplete="off"
@@ -868,15 +942,18 @@ export function LeitorPdf({
                     <textarea
                       id="resposta-leitor"
                       className="campo min-h-16"
+                      placeholder="Gabarito comentado ou síntese da fundamentação legal..."
                       value={resposta}
                       onChange={(evento) => setResposta(evento.target.value)}
                       autoComplete="off"
                     />
                   </div>
-                  <button className="btn btn-primario justify-self-start" type="submit" disabled={guardandoQuestao}>
-                    {guardandoQuestao ? "Salvando…" : "Salvar questão"}
-                  </button>
-                  <p className="text-sm text-muted">Ao salvar, a questão entra no banco.</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button className="btn btn-primario" type="submit" disabled={guardandoQuestao}>
+                      {guardandoQuestao ? "Salvando…" : "Salvar questão"}
+                    </button>
+                    <p className="text-sm text-muted">Ao salvar, a questão entra no banco.</p>
+                  </div>
                 </form>
               )}
             </>
@@ -886,15 +963,19 @@ export function LeitorPdf({
             </p>
           )}
         </section>
-        <div className="px-4 py-4 lg:min-h-0 lg:flex-1 lg:overflow-auto">
+        <div className="cartao p-4">
         <section>
-          <h2 className="font-serif text-2xl">Esta página</h2>
-          {blocoAtual ? (
-            <p className="mt-2 text-sm">
-              {blocoAtual.titulo} · {descreverFaixa(blocoAtual.paginaInicio, blocoAtual.paginaFim)}
-              <Link className="mt-2 block text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, blocoAtual.id)}>
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="font-serif text-2xl">Esta página</h2>
+            {blocoAtual ? (
+              <Link className="shrink-0 text-sm text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, blocoAtual.id)}>
                 Abrir pacote do bloco
               </Link>
+            ) : null}
+          </div>
+          {blocoAtual ? (
+            <p className="mt-2 text-sm text-muted">
+              {blocoAtual.titulo} · {descreverFaixa(blocoAtual.paginaInicio, blocoAtual.paginaFim)}
             </p>
           ) : (
             <p className="mt-2 text-sm text-muted">Esta página ainda não está num bloco.</p>
@@ -905,19 +986,24 @@ export function LeitorPdf({
             </p>
           ) : (
             <p className="mt-3 text-sm text-muted">
-              As cores ficam na barra de cima. Clique para marcar a página ou arraste uma área.
+              As cores ficam na barra de cima. Clique numa cor e arraste na página. Clique de novo na cor para soltar.
             </p>
           )}
         </section>
 
         <section className="mt-6">
-          <h2 className="font-serif text-xl">Grifos da página</h2>
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-xs tracking-wider text-pine">Grifos da página</h2>
+            <span className="text-xs text-muted">
+              {grifosDaPagina.length} {grifosDaPagina.length === 1 ? "marcação ativa" : "marcações ativas"}
+            </span>
+          </div>
           {grifosDaPagina.length === 0 ? (
             <p className="mt-2 text-sm text-muted">Nenhum grifo nesta página.</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {grifosDaPagina.map((grifo) => (
-                <li key={grifo.id} className="border border-line p-2">
+                <li key={grifo.id} className="mt-2 flex items-start justify-between gap-3 rounded-xl bg-[#fbf8f4] px-3 py-2">
                   <span className={`marca marca-${grifo.cor}`}>
                     <span className={`quadrado quadrado-${grifo.cor}`} aria-hidden />
                     {PRIORIDADES.find((item) => item.id === grifo.cor)?.nome}
@@ -939,8 +1025,8 @@ export function LeitorPdf({
           )}
         </section>
 
-        <section className="mt-6">
-          <h2 className="font-serif text-xl">Post-it</h2>
+        <section className="mt-6 border-t border-line pt-4">
+          <h2 className="text-xs tracking-wider text-pine">Post-it</h2>
           <form onSubmit={fixarPostit} className="mt-2 grid gap-2">
             <label className="rotulo" htmlFor="novo-postit">
               Texto na página {paginaSegura}
@@ -948,6 +1034,7 @@ export function LeitorPdf({
             <textarea
               id="novo-postit"
               className="campo min-h-20"
+              placeholder="Adicione uma nota vinculada a uma coordenada da página..."
               value={postit}
               onChange={(evento) => setPostit(evento.target.value)}
               autoComplete="off"
@@ -999,7 +1086,8 @@ export function LeitorPdf({
           </ul>
         </section>
 
-        <section className="mt-6">
+        </div>
+        <section className="cartao p-4">
           <h2 className="font-serif text-xl">Novo bloco</h2>
           <form onSubmit={criarBloco} className="mt-2 grid gap-2">
             <div>
@@ -1051,14 +1139,14 @@ export function LeitorPdf({
           </form>
         </section>
 
-        <section className="mt-6">
+        <section className="cartao p-4">
           <h2 className="font-serif text-xl">Blocos deste PDF</h2>
           {blocos.length === 0 ? (
             <p className="mt-2 text-sm text-muted">Nenhuma faixa ainda.</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {blocos.map((bloco) => (
-                <li key={bloco.id} className="flex items-start justify-between gap-2 border border-line px-2 py-2">
+                <li key={bloco.id} className="flex items-start justify-between gap-2 rounded-xl bg-[#fbf8f4] px-3 py-2">
                   <button type="button" className="text-left" onClick={() => setPagina(bloco.paginaInicio)}>
                     <span className="block font-medium">{bloco.titulo}</span>
                     <span className="text-sm text-muted">{descreverFaixa(bloco.paginaInicio, bloco.paginaFim)}</span>
@@ -1071,7 +1159,6 @@ export function LeitorPdf({
             </ul>
           )}
         </section>
-        </div>
       </aside>
       ) : null}
 
@@ -1126,6 +1213,7 @@ export function LeitorPdf({
           </div>
         </dialog>
       ) : null}
+      </div>
     </div>
   );
 }
