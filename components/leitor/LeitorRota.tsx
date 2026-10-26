@@ -15,6 +15,7 @@ export function LeitorRota() {
       materiaId={materiaId}
       pdfId={pdfId}
       paginaInicial={Number.isFinite(pagina) && pagina > 0 ? pagina : 1}
+      marcaInicial={busca.get("marca")}
     />
   );
 }

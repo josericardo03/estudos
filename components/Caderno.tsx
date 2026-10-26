@@ -6,10 +6,10 @@ import { mensagemErro } from "@/lib/erros";
 import { descreverFaixa } from "@/lib/faixa";
 import { repo } from "@/lib/repo";
 import { caminhoBloco, caminhoCaderno, caminhoMateria, caminhoPdf } from "@/lib/rotas";
-import type { Grifo, PostIt, Prioridade, Rect } from "@/lib/types";
-import { PRIORIDADES } from "@/lib/types";
+import type { CorGrifo, Grifo, PostIt, Rect } from "@/lib/types";
+import { IMPORTANTE, PRIORIDADES } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
-import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado } from "./ui";
+import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado, RecorteGrifo } from "./ui";
 
 function alturaDoGrifo(rects: Rect[]) {
   if (!rects.length) return 0;
@@ -47,9 +47,9 @@ export function Caderno({
 }: {
   materiaId: string;
   pdfId: string;
-  aoLado?: (pagina: number) => void;
+  aoLado?: (destino: { id: string; pagina: number; y: number }) => void;
 }) {
-  const [filtro, setFiltro] = useState<Prioridade | "todas">("todas");
+  const [filtro, setFiltro] = useState<CorGrifo | "todas">("todas");
   const [erro, setErro] = useState<string | null>(null);
   const [baixando, setBaixando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
@@ -113,15 +113,25 @@ export function Caderno({
       await baixarPdfCaderno({
         materia: caderno.materia.nome,
         arquivo: caderno.pdf.nome,
-        secoes: secoesPdf.map((secao) => ({
-          titulo: secao.titulo,
-          detalhe: secao.detalhe,
-          itens: ordenarAnotacoes(secao.grifos, secao.postits).map((item) =>
-            item.tipo === "grifo"
-              ? { tipo: "grifo" as const, cor: item.grifo.cor, pagina: item.grifo.pagina, texto: item.grifo.texto }
-              : { tipo: "postit" as const, pagina: item.postit.pagina, texto: item.postit.texto },
-          ),
-        })),
+        secoes: await Promise.all(
+          secoesPdf.map(async (secao) => ({
+            titulo: secao.titulo,
+            detalhe: secao.detalhe,
+            itens: await Promise.all(
+              ordenarAnotacoes(secao.grifos, secao.postits).map(async (item) =>
+                item.tipo === "grifo"
+                  ? {
+                      tipo: "grifo" as const,
+                      cor: item.grifo.cor,
+                      pagina: item.grifo.pagina,
+                      texto: item.grifo.texto,
+                      imagem: item.grifo.imagem ? new Uint8Array(await item.grifo.imagem.arrayBuffer()) : undefined,
+                    }
+                  : { tipo: "postit" as const, pagina: item.postit.pagina, texto: item.postit.texto },
+              ),
+            ),
+          })),
+        ),
       });
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível baixar o cadernão."));
@@ -168,6 +178,15 @@ export function Caderno({
           {item.nome}
         </button>
       ))}
+      <button
+        type="button"
+        className="btn btn-cor"
+        aria-pressed={filtro === IMPORTANTE.id}
+        onClick={() => setFiltro(IMPORTANTE.id)}
+      >
+        <span className="ponto ponto-importante" aria-hidden />
+        {IMPORTANTE.nome}
+      </button>
     </>
   );
 
@@ -204,7 +223,7 @@ export function Caderno({
                     <GrifoCaderno
                       key={item.grifo.id}
                       grifo={item.grifo}
-                      href={caminhoPdf(materiaId, pdfId, item.grifo.pagina)}
+                      href={caminhoPdf(materiaId, pdfId, item.grifo.pagina, item.grifo.id)}
                       aoLado={aoLado}
                       onApagar={() => apagarGrifo(item.grifo.id)}
                     />
@@ -212,7 +231,7 @@ export function Caderno({
                     <PostItCaderno
                       key={item.postit.id}
                       postit={item.postit}
-                      href={caminhoPdf(materiaId, pdfId, item.postit.pagina)}
+                      href={caminhoPdf(materiaId, pdfId, item.postit.pagina, item.postit.id)}
                       aoLado={aoLado}
                       onErro={setErro}
                     />
@@ -254,7 +273,7 @@ export function Caderno({
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Cadernão</h1>
       <p className="mt-2 text-muted">{dados.pdf.nome}</p>
       <p className="mt-3 max-w-xl text-sm text-muted">
-        Os grifos e os post-its aparecem aqui agrupados pelo bloco. O post-it fica acima ou abaixo das marcações conforme o ponto em que foi fixado na página.
+        Os grifos e os post-its aparecem aqui agrupados pelo bloco. Clique numa marcação para abrir o ponto dela no PDF. O post-it fica acima ou abaixo das marcações conforme o ponto em que foi fixado na página.
       </p>
       <div className="mt-4 flex flex-wrap gap-2">{filtros}</div>
       {erro ? <div className="mt-4"><Aviso texto={erro} /></div> : null}
@@ -271,15 +290,26 @@ function GrifoCaderno({
 }: {
   grifo: Grifo;
   href: string;
-  aoLado?: (pagina: number) => void;
+  aoLado?: (destino: { id: string; pagina: number; y: number }) => void;
   onApagar: () => void;
 }) {
+  const destino = {
+    id: grifo.id,
+    pagina: grifo.pagina,
+    y: alturaDoGrifo(grifo.rects),
+  };
+  const corpo = (
+    <>
+      {grifo.imagem ? <RecorteGrifo imagem={grifo.imagem} texto={grifo.texto} /> : null}
+      {grifo.texto}
+    </>
+  );
   return (
     <article>
       <div className="mb-1 flex items-center justify-between gap-3">
         <MarcaPrioridade cor={grifo.cor} />
         {aoLado ? (
-          <button type="button" className="text-sm text-muted hover:underline" onClick={() => aoLado(grifo.pagina)}>
+          <button type="button" className="text-sm text-muted hover:underline" onClick={() => aoLado(destino)}>
             p. {grifo.pagina}
           </button>
         ) : (
@@ -288,9 +318,15 @@ function GrifoCaderno({
           </Link>
         )}
       </div>
-      <blockquote className="citacao font-serif text-lg" data-prioridade={grifo.cor}>
-        {grifo.texto}
-      </blockquote>
+      {aoLado ? (
+        <button type="button" className="citacao font-serif text-lg" data-prioridade={grifo.cor} title="Mostrar no PDF" onClick={() => aoLado(destino)}>
+          {corpo}
+        </button>
+      ) : (
+        <Link href={href} className="citacao font-serif text-lg" data-prioridade={grifo.cor} title="Mostrar no PDF">
+          {corpo}
+        </Link>
+      )}
       <div className="mt-1">
         <Confirmar rotulo="Apagar grifo" confirmar="Apagar" onConfirmar={onApagar} />
       </div>
@@ -306,7 +342,7 @@ function PostItCaderno({
 }: {
   postit: PostIt;
   href: string;
-  aoLado?: (pagina: number) => void;
+  aoLado?: (destino: { id: string; pagina: number; y: number }) => void;
   onErro: (texto: string | null) => void;
 }) {
   const [texto, setTexto] = useState(postit.texto);
@@ -321,7 +357,11 @@ function PostItCaderno({
       <div className="mb-2 flex justify-between text-xs uppercase tracking-wider">
         <span>Post-it</span>
         {aoLado ? (
-          <button type="button" className="hover:underline" onClick={() => aoLado(postit.pagina)}>
+          <button
+            type="button"
+            className="hover:underline"
+            onClick={() => aoLado({ id: postit.id, pagina: postit.pagina, y: postit.y })}
+          >
             p. {postit.pagina}
           </button>
         ) : (

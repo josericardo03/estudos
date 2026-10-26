@@ -197,6 +197,10 @@ body {
 .ponto-alta { background: #e07a5f; }
 .ponto-media { background: #e2b43a; }
 .ponto-baixa { background: #4c86ab; }
+.ponto-importante {
+  border: 1.5px solid var(--ink);
+  border-radius: 0.1rem;
+}
 
 .btn-cor[aria-pressed="true"] {
   box-shadow: inset 0 0 0 1.5px var(--pine);
@@ -259,6 +263,12 @@ body {
 .quadrado-baixa,
 .marca-baixa { color: var(--baixa); }
 .quadrado-baixa { background: var(--baixa); }
+.quadrado-importante,
+.marca-importante { color: var(--ink); }
+.quadrado-importante {
+  border: 1.5px solid var(--ink);
+  border-radius: 0.1rem;
+}
 
 .nav-link {
   color: var(--muted);
@@ -316,6 +326,21 @@ body {
   background: var(--baixa-soft);
 }
 
+.citacao[data-prioridade="importante"] {
+  border: 1.5px solid var(--ink);
+  background: #fff;
+}
+
+.recorte-grifo {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-bottom: 0.5rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 0.4rem;
+  background: #fff;
+}
+
 .nota {
   background: #fff6d4;
   color: #3d3110;
@@ -357,6 +382,70 @@ body {
 .grifo-alta { background: rgb(224 122 95 / 0.42); }
 .grifo-media { background: rgb(226 180 58 / 0.45); }
 .grifo-baixa { background: rgb(76 134 171 / 0.34); }
+.grifo-importante {
+  mix-blend-mode: normal;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 2px var(--ink);
+  background: rgb(17 24 20 / 0.06);
+}
+.grifo-importante::after {
+  content: "Importante";
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0 0.3rem;
+  border-radius: 2px 0 3px 0;
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-outfit);
+  font-size: 0.6rem;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.grifo-vivo {
+  mix-blend-mode: normal;
+  background: rgb(226 180 58 / 0.42);
+  box-shadow: inset 0 0 0 2px #8a5a00;
+}
+.grifo-vivo.grifo-alta {
+  background: rgb(224 122 95 / 0.45);
+  box-shadow: inset 0 0 0 2px #c45c4a;
+}
+.grifo-vivo.grifo-media {
+  background: rgb(226 180 58 / 0.5);
+  box-shadow: inset 0 0 0 2px #b5812a;
+}
+.grifo-vivo.grifo-baixa {
+  background: rgb(76 134 171 / 0.42);
+  box-shadow: inset 0 0 0 2px #3d6f8f;
+}
+.grifo-vivo.grifo-importante {
+  background: rgb(17 24 20 / 0.18);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.marca-foco {
+  animation: pulso-marca 0.8s ease-out 2;
+}
+
+@keyframes pulso-marca {
+  0% { outline: 3px solid rgb(17 24 20 / 0.7); outline-offset: 0; }
+  100% { outline: 3px solid rgb(17 24 20 / 0); outline-offset: 10px; }
+}
+
+button.citacao,
+a.citacao {
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+}
 
 .postit-marca {
   position: absolute;
@@ -490,7 +579,7 @@ body {
 }
 
 .textLayer ::selection {
-  background: rgb(29 74 56 / 0.28);
+  background: rgb(226 180 58 / 0.72);
   color: transparent;
 }
 

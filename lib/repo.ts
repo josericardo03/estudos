@@ -8,12 +8,12 @@ import { ErroEstudo } from "./erros";
 import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
 import type {
   Bloco,
+  CorGrifo,
   Edital,
   Grifo,
   Materia,
   PdfDoc,
   PostIt,
-  Prioridade,
   Questao,
   Rect,
   StatusBloco,
@@ -237,8 +237,9 @@ export const repo = {
       pdfId: string;
       pagina: number;
       texto: string;
-      cor: Prioridade;
+      cor: CorGrifo;
       rects: Rect[];
+      imagem?: Blob;
     }) {
       const db = getDb();
       const pdf = await db.pdfs.get(entrada.pdfId);
@@ -260,6 +261,7 @@ export const repo = {
         texto,
         cor: entrada.cor,
         rects: entrada.rects,
+        ...(entrada.imagem ? { imagem: entrada.imagem } : {}),
         createdAt: Date.now(),
       };
       await db.grifos.add(grifo);

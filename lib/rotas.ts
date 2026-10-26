@@ -2,9 +2,13 @@ export function caminhoMateria(materiaId: string) {
   return `/materias/${materiaId}`;
 }
 
-export function caminhoPdf(materiaId: string, pdfId: string, pagina?: number) {
+export function caminhoPdf(materiaId: string, pdfId: string, pagina?: number, marca?: string) {
   const base = `/materias/${materiaId}/pdfs/${pdfId}`;
-  return pagina ? `${base}?pagina=${pagina}` : base;
+  const params = new URLSearchParams();
+  if (pagina) params.set("pagina", String(pagina));
+  if (marca) params.set("marca", marca);
+  const busca = params.toString();
+  return busca ? `${base}?${busca}` : base;
 }
 
 export function caminhoCaderno(materiaId: string, pdfId: string) {

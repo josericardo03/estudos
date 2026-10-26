@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import type { Prioridade } from "./types";
+import type { CorGrifo } from "./types";
+import { nomeDaCor } from "./types";
 
 const LARGURA = 595.28;
 const ALTURA = 841.89;
@@ -7,14 +8,15 @@ const MARGEM = 50;
 
 const TINTA = rgb(0.11, 0.14, 0.12);
 const SUAVE = rgb(0.42, 0.4, 0.36);
-const CORES: Record<Prioridade, ReturnType<typeof rgb>> = {
+const CORES: Record<CorGrifo, ReturnType<typeof rgb>> = {
   alta: rgb(0.78, 0.35, 0.28),
   media: rgb(0.72, 0.55, 0.12),
   baixa: rgb(0.28, 0.45, 0.6),
+  importante: TINTA,
 };
 
 export type ItemCadernoPdf =
-  | { tipo: "grifo"; cor: Prioridade; pagina: number; texto: string }
+  | { tipo: "grifo"; cor: CorGrifo; pagina: number; texto: string; imagem?: Uint8Array }
   | { tipo: "postit"; pagina: number; texto: string };
 
 export type SecaoCadernoPdf = {
@@ -163,8 +165,26 @@ export async function gerarBytesCaderno(entrada: {
       y -= 6;
       if (item.tipo === "grifo") {
         const cor = CORES[item.cor];
-        const rotulo = item.cor === "alta" ? "Alta" : item.cor === "media" ? "Média" : "Baixa";
-        escrever(`${rotulo}  ·  p. ${item.pagina}`, miuda, 9, cor);
+        escrever(`${nomeDaCor(item.cor)}  ·  p. ${item.pagina}`, miuda, 9, cor);
+        if (item.imagem) {
+          const figura = await documento.embedPng(item.imagem);
+          const alturaMaxima = ALTURA - MARGEM * 2 - 40;
+          const proporcao = Math.min(1, larguraUtil / figura.width, alturaMaxima / figura.height);
+          const largura = figura.width * proporcao;
+          const altura = figura.height * proporcao;
+          reservar(altura + 10);
+          y -= 4;
+          pagina.drawImage(figura, { x: MARGEM, y: y - altura, width: largura, height: altura });
+          pagina.drawRectangle({
+            x: MARGEM,
+            y: y - altura,
+            width: largura,
+            height: altura,
+            borderColor: TINTA,
+            borderWidth: 1.2,
+          });
+          y -= altura + 8;
+        }
         const linhas = linhasDe(item.texto, corpo, 12, larguraUtil - 14);
         for (const linha of linhas) {
           reservar(18);

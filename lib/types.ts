@@ -1,4 +1,5 @@
 export type Prioridade = "alta" | "media" | "baixa";
+export type CorGrifo = Prioridade | "importante";
 export type StatusBloco = "estudando" | "finalizado";
 export type StatusRevisao = "nova" | "revisar" | "dominada";
 
@@ -40,8 +41,9 @@ export type Grifo = {
   blocoId: string | null;
   pagina: number;
   texto: string;
-  cor: Prioridade;
+  cor: CorGrifo;
   rects: Rect[];
+  imagem?: Blob;
   createdAt: number;
 };
 
@@ -87,6 +89,13 @@ export const PRIORIDADES: { id: Prioridade; nome: string }[] = [
   { id: "media", nome: "Média" },
   { id: "baixa", nome: "Baixa" },
 ];
+
+export const IMPORTANTE = { id: "importante" as const, nome: "Importante" };
+
+export function nomeDaCor(cor: CorGrifo) {
+  if (cor === IMPORTANTE.id) return IMPORTANTE.nome;
+  return PRIORIDADES.find((item) => item.id === cor)?.nome ?? cor;
+}
 
 export const STATUS_REVISAO: { id: StatusRevisao; nome: string }[] = [
   { id: "nova", nome: "Nova" },

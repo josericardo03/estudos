@@ -9,8 +9,8 @@ import { normalizarRects } from "@/lib/rects";
 import { repo } from "@/lib/repo";
 import { caminhoBloco, caminhoMateria } from "@/lib/rotas";
 import { Caderno } from "../Caderno";
-import type { Grifo, PostIt, Prioridade, Questao, Rect } from "@/lib/types";
-import { MAX_QUESTOES, PRIORIDADES } from "@/lib/types";
+import type { CorGrifo, Grifo, PostIt, Questao, Rect } from "@/lib/types";
+import { IMPORTANTE, MAX_QUESTOES, PRIORIDADES, nomeDaCor } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "../ui";
 
@@ -57,6 +57,30 @@ function textoSobRects(folha: HTMLElement, rects: Rect[]) {
   return partes.join(" ").replace(/\s+/g, " ").trim();
 }
 
+function caixaEnvolvente(rects: Rect[], folga: number): Rect {
+  const x = Math.max(0, Math.min(...rects.map((rect) => rect.x)) - folga);
+  const y = Math.max(0, Math.min(...rects.map((rect) => rect.y)) - folga);
+  const direita = Math.min(1, Math.max(...rects.map((rect) => rect.x + rect.w)) + folga);
+  const baixo = Math.min(1, Math.max(...rects.map((rect) => rect.y + rect.h)) + folga);
+  return { x, y, w: direita - x, h: baixo - y };
+}
+
+function recortarCanvas(canvas: HTMLCanvasElement, rect: Rect) {
+  const sx = Math.round(rect.x * canvas.width);
+  const sy = Math.round(rect.y * canvas.height);
+  const sw = Math.max(1, Math.round(rect.w * canvas.width));
+  const sh = Math.max(1, Math.round(rect.h * canvas.height));
+  const destino = document.createElement("canvas");
+  destino.width = sw;
+  destino.height = sh;
+  const contexto = destino.getContext("2d");
+  if (!contexto) return Promise.resolve(null);
+  contexto.fillStyle = "#fff";
+  contexto.fillRect(0, 0, sw, sh);
+  contexto.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return new Promise<Blob | null>((resolver) => destino.toBlob(resolver, "image/png"));
+}
+
 function BarraLado({
   nome,
   aoAjustar,
@@ -98,14 +122,18 @@ function BarraLado({
   );
 }
 
+type FocoMarca = { id: string; pagina: number; y: number };
+
 export function LeitorPdf({
   materiaId,
   pdfId,
   paginaInicial,
+  marcaInicial,
 }: {
   materiaId: string;
   pdfId: string;
   paginaInicial: number;
+  marcaInicial?: string | null;
 }) {
   const palcoRef = useRef<HTMLDivElement>(null);
   const folhaRef = useRef<HTMLDivElement>(null);
@@ -134,7 +162,7 @@ export function LeitorPdf({
   const [titulo, setTitulo] = useState("");
   const [inicio, setInicio] = useState(String(Math.max(1, paginaInicial || 1)));
   const [fim, setFim] = useState(String(Math.max(1, paginaInicial || 1)));
-  const [corMarca, setCorMarca] = useState<Prioridade | null>(null);
+  const [corMarca, setCorMarca] = useState<CorGrifo | null>(null);
   const [traco, setTraco] = useState<Rect | null>(null);
   const [postit, setPostit] = useState("");
   const [colocandoPostit, setColocandoPostit] = useState(false);
@@ -147,6 +175,8 @@ export function LeitorPdf({
   const [guardando, setGuardando] = useState(false);
   const [guardandoQuestao, setGuardandoQuestao] = useState(false);
   const [editandoQuestao, setEditandoQuestao] = useState<string | null>(null);
+  const [foco, setFoco] = useState<FocoMarca | null>(null);
+  const [marcaAplicada, setMarcaAplicada] = useState<string | null>(null);
 
   if (paginaInicial !== origem) {
     setOrigem(paginaInicial);
@@ -167,8 +197,8 @@ export function LeitorPdf({
     null,
   );
   const { dados: blocos } = useConsulta(() => repo.blocos.listarPorPdf(pdfId), [pdfId], []);
-  const { dados: grifos } = useConsulta(() => repo.grifos.listarPorPdf(pdfId), [pdfId], []);
-  const { dados: postits } = useConsulta(() => repo.postits.listarPorPdf(pdfId), [pdfId], []);
+  const { dados: grifos, pronto: grifosProntos } = useConsulta(() => repo.grifos.listarPorPdf(pdfId), [pdfId], []);
+  const { dados: postits, pronto: postitsProntos } = useConsulta(() => repo.postits.listarPorPdf(pdfId), [pdfId], []);
   const { dados: questoes } = useConsulta(() => repo.questoes.listarPorPdf(pdfId), [pdfId], []);
 
   useEffect(() => {
@@ -179,6 +209,23 @@ export function LeitorPdf({
   const paginaNumero = Number.isFinite(pagina) ? pagina : 1;
   const paginaSegura = Math.min(total, Math.max(1, paginaNumero));
   const blocoIdAtual = blocoDaPagina(blocos, paginaSegura)?.id ?? null;
+
+  if (marcaInicial && marcaAplicada !== marcaInicial && grifosProntos && postitsProntos) {
+    setMarcaAplicada(marcaInicial);
+    const grifoInicial = grifos.find((item) => item.id === marcaInicial);
+    const postitInicial = postits.find((item) => item.id === marcaInicial);
+    if (grifoInicial) {
+      setPagina(grifoInicial.pagina);
+      setFoco({
+        id: grifoInicial.id,
+        pagina: grifoInicial.pagina,
+        y: Math.min(...grifoInicial.rects.map((rect) => rect.y)),
+      });
+    } else if (postitInicial) {
+      setPagina(postitInicial.pagina);
+      setFoco({ id: postitInicial.id, pagina: postitInicial.pagina, y: postitInicial.y });
+    }
+  }
 
   useEffect(() => {
     questoesDialogo.current?.close();
@@ -425,6 +472,17 @@ export function LeitorPdf({
     return () => window.removeEventListener("keydown", aoTeclar);
   }, [total]);
 
+  useEffect(() => {
+    if (!foco || !pronta || medida?.pagina !== paginaSegura || foco.pagina !== paginaSegura) return;
+    const palco = palcoRef.current;
+    const folha = folhaRef.current;
+    if (!palco || !folha) return;
+    const caixaPalco = palco.getBoundingClientRect();
+    const caixaFolha = folha.getBoundingClientRect();
+    const delta = caixaFolha.top + foco.y * caixaFolha.height - caixaPalco.top - palco.clientHeight * 0.28;
+    if (Math.abs(delta) > 12) palco.scrollBy({ top: delta, behavior: "smooth" });
+  }, [foco, pronta, medida, paginaSegura]);
+
   if (!arquivoPronto) return <Abrindo texto="Abrindo o PDF…" />;
   if (erroArquivo) return <div className="px-5 py-10"><Aviso texto={erroArquivo} /></div>;
   if (!arquivo || arquivo.materiaId !== materiaId) {
@@ -441,29 +499,36 @@ export function LeitorPdf({
     : [];
   const medidaAtual = medida?.pagina === paginaSegura ? medida : null;
 
-  async function gravarGrifo(cor: Prioridade, texto: string, rects: Rect[]) {
+  async function gravarGrifo(cor: CorGrifo, texto: string, rects: Rect[]) {
     setErro(null);
     setAviso(null);
     try {
-      const criado = await repo.grifos.criar({ pdfId, pagina: paginaSegura, texto, cor, rects });
+      const canvas = canvasRef.current;
+      const imagem =
+        cor === IMPORTANTE.id && canvas ? ((await recortarCanvas(canvas, rects[0])) ?? undefined) : undefined;
+      const criado = await repo.grifos.criar({ pdfId, pagina: paginaSegura, texto, cor, rects, imagem });
       marcasParaDesfazer.current.push({ id: criado.id, pagina: criado.pagina });
       grifosAtuais.current = [...grifosAtuais.current.filter((item) => item.id !== criado.id), criado];
-      const nome = PRIORIDADES.find((item) => item.id === cor)?.nome ?? "cor";
-      setAviso(`Marcado em ${nome.toLowerCase()}.`);
+      setAviso(
+        cor === IMPORTANTE.id
+          ? "Marcado como importante. O recorte foi para o cadernão."
+          : `Marcado em ${nomeDaCor(cor).toLowerCase()}.`,
+      );
       setCorMarca(cor);
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível marcar."));
     }
   }
 
-  async function grifar(cor: Prioridade) {
+  async function grifar(cor: CorGrifo) {
     if (!selecao) return;
-    await gravarGrifo(cor, selecao.texto, selecao.rects);
+    const rects = cor === IMPORTANTE.id ? [caixaEnvolvente(selecao.rects, 0.006)] : selecao.rects;
+    await gravarGrifo(cor, selecao.texto, rects);
     window.getSelection()?.removeAllRanges();
     setSelecao(null);
   }
 
-  function escolherCor(cor: Prioridade) {
+  function escolherCor(cor: CorGrifo) {
     setColocandoPostit(false);
     if (selecao) {
       void grifar(cor);
@@ -534,7 +599,8 @@ export function LeitorPdf({
     };
     const folha = folhaRef.current;
     const extraido = folha ? textoSobRects(folha, [rect]).slice(0, 280) : "";
-    void gravarGrifo(corMarca, extraido || `Página ${paginaSegura}`, [rect]);
+    const reserva = corMarca === IMPORTANTE.id ? `Figura · página ${paginaSegura}` : `Página ${paginaSegura}`;
+    void gravarGrifo(corMarca, extraido || reserva, [rect]);
   }
 
   async function excluirBloco(blocoId: string) {
@@ -701,6 +767,11 @@ export function LeitorPdf({
     window.addEventListener("pointerup", soltar);
   }
 
+  function irParaMarca(destino: FocoMarca) {
+    setPagina(destino.pagina);
+    setFoco(destino);
+  }
+
   async function ajustar() {
     ajusteManual.current = false;
     const palco = palcoRef.current;
@@ -838,13 +909,25 @@ export function LeitorPdf({
                   {item.nome}
                 </button>
               ))}
+              <button
+                type="button"
+                className="btn btn-cor"
+                aria-pressed={corMarca === IMPORTANTE.id}
+                onMouseDown={(evento) => evento.preventDefault()}
+                onClick={() => escolherCor(IMPORTANTE.id)}
+              >
+                <span className="ponto ponto-importante" aria-hidden />
+                {IMPORTANTE.nome}
+              </button>
             </div>
             <span className="atalho ml-auto">Ctrl+Z</span>
           </div>
           <p className="mt-2 text-sm text-muted">
-              {corMarca
-                ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
-                : "Clique numa cor e arraste na página. Se houver trecho selecionado, a cor grifa o trecho. Ctrl+Z desfaz a última marcação."}
+              {corMarca === IMPORTANTE.id
+                ? "Arraste um quadrado em volta do trecho ou da figura. A área vai como imagem para o cadernão. Clique de novo, ou Esc, para soltar."
+                : corMarca
+                  ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
+                  : "Clique numa cor e arraste na página. Se houver trecho selecionado, a cor grifa o trecho. Importante põe um quadrado em volta e leva figuras junto. Ctrl+Z desfaz a última marcação."}
           </p>
         </div>
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
@@ -869,7 +952,8 @@ export function LeitorPdf({
                   grifo.rects.map((rect, indice) => (
                     <span
                       key={`${grifo.id}-${indice}`}
-                      className={`grifo grifo-${grifo.cor}`}
+                      data-marca={grifo.id}
+                      className={`grifo grifo-${grifo.cor}${foco?.id === grifo.id ? " marca-foco" : ""}`}
                       style={{
                         left: `${rect.x * 100}%`,
                         top: `${rect.y * 100}%`,
@@ -880,6 +964,22 @@ export function LeitorPdf({
                   )),
                 )}
               </div>
+              {selecao && !corMarca ? (
+                <div className="pointer-events-none absolute inset-0 z-[4]">
+                  {selecao.rects.map((rect, indice) => (
+                    <span
+                      key={`selecao-${indice}`}
+                      className="grifo grifo-vivo"
+                      style={{
+                        left: `${rect.x * 100}%`,
+                        top: `${rect.y * 100}%`,
+                        width: `${rect.w * 100}%`,
+                        height: `${rect.h * 100}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
               <div
                 ref={textoRef}
                 className="textLayer"
@@ -927,7 +1027,7 @@ export function LeitorPdf({
                 >
                   {traco && traco.w > 0 && traco.h > 0 ? (
                     <span
-                      className={`grifo grifo-${corMarca}`}
+                      className={`grifo grifo-vivo grifo-${corMarca}`}
                       style={{
                         left: `${traco.x * 100}%`,
                         top: `${traco.y * 100}%`,
@@ -945,7 +1045,7 @@ export function LeitorPdf({
                   <button
                     key={item.id}
                     type="button"
-                    className="postit-marca"
+                    className={`postit-marca${foco?.id === item.id ? " marca-foco" : ""}`}
                     style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
                     aria-pressed={postitAberto === item.id}
                     aria-controls={`postit-${item.id}`}
@@ -971,7 +1071,7 @@ export function LeitorPdf({
             aoDivisao={iniciarDivisao}
           />
           <div className="min-h-0 flex-1">
-            <Caderno materiaId={materiaId} pdfId={pdfId} aoLado={setPagina} />
+            <Caderno materiaId={materiaId} pdfId={pdfId} aoLado={irParaMarca} />
           </div>
         </aside>
       ) : null}
@@ -1102,11 +1202,24 @@ export function LeitorPdf({
             <ul className="mt-2 flex flex-col gap-2">
               {grifosDaPagina.map((grifo) => (
                 <li key={grifo.id} className="mt-2 flex items-start justify-between gap-3 rounded-xl bg-[#fbf8f4] px-3 py-2">
-                  <span className={`marca marca-${grifo.cor}`}>
-                    <span className={`quadrado quadrado-${grifo.cor}`} aria-hidden />
-                    {PRIORIDADES.find((item) => item.id === grifo.cor)?.nome}
-                  </span>
-                  <p className="recorte mt-1 text-sm">{grifo.texto}</p>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left text-inherit"
+                    title="Mostrar no PDF"
+                    onClick={() =>
+                      irParaMarca({
+                        id: grifo.id,
+                        pagina: grifo.pagina,
+                        y: Math.min(...grifo.rects.map((rect) => rect.y)),
+                      })
+                    }
+                  >
+                    <span className={`marca marca-${grifo.cor}`}>
+                      <span className={`quadrado quadrado-${grifo.cor}`} aria-hidden />
+                      {nomeDaCor(grifo.cor)}
+                    </span>
+                    <span className="recorte mt-1 text-sm">{grifo.texto}</span>
+                  </button>
                   <button
                     type="button"
                     className="btn-perigo mt-1"
@@ -1165,7 +1278,10 @@ export function LeitorPdf({
                     type="button"
                     className={postitAberto === item.id ? "postit-item-texto" : "postit-item-texto recorte"}
                     aria-pressed={postitAberto === item.id}
-                    onClick={() => setPostitAberto((atual) => (atual === item.id ? null : item.id))}
+                    onClick={() => {
+                      setPostitAberto((atual) => (atual === item.id ? null : item.id));
+                      irParaMarca({ id: item.id, pagina: item.pagina, y: item.y });
+                    }}
                   >
                     {item.texto}
                   </button>

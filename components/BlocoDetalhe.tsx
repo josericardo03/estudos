@@ -10,7 +10,7 @@ import { caminhoCaderno, caminhoMateria, caminhoPdf } from "@/lib/rotas";
 import type { PostIt, Questao } from "@/lib/types";
 import { MAX_QUESTOES, STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
-import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado } from "./ui";
+import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado, RecorteGrifo } from "./ui";
 
 export function BlocoDetalhe({
   materiaId,
@@ -196,13 +196,14 @@ export function BlocoDetalhe({
                 <div className="mb-1 flex items-center justify-between">
                   <MarcaPrioridade cor={grifo.cor} />
                   <Link
-                    href={caminhoPdf(materiaId, pdfId, grifo.pagina)}
+                    href={caminhoPdf(materiaId, pdfId, grifo.pagina, grifo.id)}
                     className="text-sm text-muted no-underline hover:underline"
                   >
                     p. {grifo.pagina}
                   </Link>
                 </div>
                 <blockquote className="citacao font-serif" data-prioridade={grifo.cor}>
+                  {grifo.imagem ? <RecorteGrifo imagem={grifo.imagem} texto={grifo.texto} /> : null}
                   {grifo.texto}
                 </blockquote>
                 <Confirmar
@@ -365,7 +366,7 @@ function PostItBloco({
   }
   return (
     <article className="nota">
-      <Link href={caminhoPdf(materiaId, pdfId, postit.pagina)} className="text-xs uppercase tracking-wider no-underline hover:underline">
+      <Link href={caminhoPdf(materiaId, pdfId, postit.pagina, postit.id)} className="text-xs uppercase tracking-wider no-underline hover:underline">
         p. {postit.pagina}
       </Link>
       <textarea

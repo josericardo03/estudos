@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import type { Prioridade } from "@/lib/types";
-import { PRIORIDADES } from "@/lib/types";
+import { useEffect, useRef, useState } from "react";
+import type { CorGrifo } from "@/lib/types";
+import { nomeDaCor } from "@/lib/types";
 
 export function Abrindo({ texto }: { texto: string }) {
   return <p className="px-5 py-10 text-muted">{texto}</p>;
@@ -38,14 +38,26 @@ export function NaoEncontrado({ titulo, detalhe }: { titulo: string; detalhe: st
   );
 }
 
-export function MarcaPrioridade({ cor }: { cor: Prioridade }) {
-  const nome = PRIORIDADES.find((item) => item.id === cor)?.nome ?? cor;
+export function MarcaPrioridade({ cor }: { cor: CorGrifo }) {
   return (
     <span className={`marca marca-${cor}`}>
       <span className={`quadrado quadrado-${cor}`} aria-hidden />
-      {nome}
+      {nomeDaCor(cor)}
     </span>
   );
+}
+
+export function RecorteGrifo({ imagem, texto }: { imagem: Blob; texto: string }) {
+  const imagemRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const elemento = imagemRef.current;
+    if (!elemento) return;
+    const endereco = URL.createObjectURL(imagem);
+    elemento.src = endereco;
+    return () => URL.revokeObjectURL(endereco);
+  }, [imagem]);
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img ref={imagemRef} className="recorte-grifo" alt={texto} />;
 }
 
 export function Confirmar({
