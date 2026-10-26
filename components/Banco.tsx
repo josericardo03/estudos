@@ -7,7 +7,7 @@ import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
 import { compararRevisao } from "@/lib/revisao";
 import { caminhoBloco } from "@/lib/rotas";
-import type { Questao, StatusRevisao } from "@/lib/types";
+import type { Materia, Questao, StatusRevisao } from "@/lib/types";
 import { STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
@@ -19,10 +19,45 @@ type Cartao = Questao & {
   blocoId: string;
 };
 
+function embaralhar<T>(lista: T[]) {
+  const copia = lista.slice();
+  for (let i = copia.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const atual = copia[i];
+    copia[i] = copia[j];
+    copia[j] = atual;
+  }
+  return copia;
+}
+
+async function carregarCartoes(materiaIds: string[]) {
+  const listas = await Promise.all(materiaIds.map((id) => repo.questoes.listarPorMateria(id)));
+  const questoes = listas.flat();
+  const materias = await repo.materias.listar();
+  const blocos = await Promise.all(questoes.map((questao) => repo.blocos.obter(questao.blocoId)));
+  const pdfIds = [...new Set(questoes.map((questao) => questao.pdfId))];
+  const pdfs = await Promise.all(pdfIds.map((id) => repo.pdfs.obter(id)));
+  return questoes.flatMap((questao) => {
+    const bloco = blocos.find((item) => item?.id === questao.blocoId);
+    const pdf = pdfs.find((item) => item?.id === questao.pdfId);
+    const materia = materias.find((item) => item.id === questao.materiaId);
+    if (!bloco || !pdf || !materia) return [];
+    const cartao: Cartao = {
+      ...questao,
+      materiaNome: materia.nome,
+      pdfNome: pdf.nome,
+      blocoTitulo: bloco.titulo,
+      blocoId: bloco.id,
+    };
+    return [cartao];
+  });
+}
+
 export function Banco() {
   const parametros = useSearchParams();
   const router = useRouter();
   const materiaId = parametros.get("materia") ?? "";
+  const [modo, setModo] = useState<"revisao" | "simulado">("revisao");
   const { dados: materias, pronto: materiasProntas } = useConsulta(() => repo.materias.listar(), [], []);
 
   function escolher(id: string) {
@@ -34,27 +69,41 @@ export function Banco() {
       <p className="olho">Revisão</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Banco</h1>
       <p className="mt-3 max-w-xl text-muted">
-        As questões entram aqui quando você as salva num bloco. A revisão fica por matéria.
+        As questões entram aqui quando você as salva num bloco. Revise uma a uma ou gere um simulado.
       </p>
-      <div className="mt-6">
-        <label className="rotulo" htmlFor="filtro-materia">
-          Matéria
-        </label>
-        <select
-          id="filtro-materia"
-          className="campo"
-          value={materiasProntas ? materiaId : ""}
-          onChange={(evento) => escolher(evento.target.value)}
-        >
-          <option value="">Todas as matérias</option>
-          {materias.map((materia) => (
-            <option key={materia.id} value={materia.id}>
-              {materia.nome}
-            </option>
-          ))}
-        </select>
+      <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Modo do banco">
+        <button type="button" className="btn btn-seletor" aria-pressed={modo === "revisao"} onClick={() => setModo("revisao")}>
+          Revisão
+        </button>
+        <button type="button" className="btn btn-seletor" aria-pressed={modo === "simulado"} onClick={() => setModo("simulado")}>
+          Simulado
+        </button>
       </div>
-      <Baralho key={materiaId || "todas"} materiaId={materiaId} />
+      {modo === "revisao" ? (
+        <>
+          <div className="mt-6">
+            <label className="rotulo" htmlFor="filtro-materia">
+              Matéria
+            </label>
+            <select
+              id="filtro-materia"
+              className="campo"
+              value={materiasProntas ? materiaId : ""}
+              onChange={(evento) => escolher(evento.target.value)}
+            >
+              <option value="">Todas as matérias</option>
+              {materias.map((materia) => (
+                <option key={materia.id} value={materia.id}>
+                  {materia.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Baralho key={materiaId || "todas"} materiaId={materiaId} />
+        </>
+      ) : (
+        <Simulado materias={materias} />
+      )}
     </main>
   );
 }
@@ -173,6 +222,168 @@ function Baralho({ materiaId }: { materiaId: string }) {
           disabled={indice >= dados.length - 1}
         >
           Próxima
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Simulado({ materias }: { materias: Materia[] }) {
+  const [escolhidas, setEscolhidas] = useState<string[] | null>(null);
+  const [prova, setProva] = useState<Cartao[] | null>(null);
+  const [indice, setIndice] = useState(0);
+  const [rascunhos, setRascunhos] = useState<Record<string, string>>({});
+  const [encerrado, setEncerrado] = useState(false);
+  const [gerando, setGerando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const ids = escolhidas ?? materias.map((materia) => materia.id);
+  const todas = materias.length > 0 && materias.every((materia) => ids.includes(materia.id));
+
+  function alternar(id: string) {
+    setEscolhidas(ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+  }
+
+  async function gerar() {
+    setErro(null);
+    if (!ids.length) {
+      setErro("Escolha ao menos uma matéria.");
+      return;
+    }
+    setGerando(true);
+    try {
+      const cartoes = embaralhar(await carregarCartoes(ids));
+      if (!cartoes.length) {
+        setErro("Nenhuma questão nessas matérias.");
+        return;
+      }
+      setProva(cartoes);
+      setIndice(0);
+      setRascunhos({});
+      setEncerrado(false);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível gerar o simulado."));
+    } finally {
+      setGerando(false);
+    }
+  }
+
+  if (!prova) {
+    return (
+      <form
+        className="mt-6"
+        onSubmit={(evento) => {
+          evento.preventDefault();
+          void gerar();
+        }}
+      >
+        {erro ? <div className="mb-4"><Aviso texto={erro} /></div> : null}
+        <fieldset>
+          <legend className="rotulo">Matérias do simulado</legend>
+          <p className="mb-3 text-sm text-muted">Uma matéria, várias ou todas. As questões saem embaralhadas.</p>
+          <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
+            <input
+              type="checkbox"
+              checked={todas}
+              onChange={() => setEscolhidas(todas ? [] : materias.map((materia) => materia.id))}
+            />
+            <span>Todas as matérias</span>
+          </label>
+          <ul className="mt-2 flex flex-col gap-2">
+            {materias.map((materia) => (
+              <li key={materia.id}>
+                <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
+                  <input type="checkbox" checked={ids.includes(materia.id)} onChange={() => alternar(materia.id)} />
+                  <span>{materia.nome}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
+        <button className="btn btn-primario mt-4" type="submit" disabled={gerando || materias.length === 0}>
+          {gerando ? "Gerando…" : "Gerar simulado"}
+        </button>
+      </form>
+    );
+  }
+
+  if (encerrado) {
+    const respondidas = prova.filter((questao) => rascunhos[questao.id]?.trim()).length;
+    return (
+      <div className="mt-6">
+        <p className="text-sm text-muted">
+          {respondidas} de {prova.length} com resposta escrita.
+        </p>
+        <ol className="mt-4 flex flex-col gap-3">
+          {prova.map((questao, posicao) => (
+            <li key={questao.id} className="cartao p-4">
+              <p className="text-sm text-muted">
+                {posicao + 1}. {questao.materiaNome} · {questao.blocoTitulo}
+              </p>
+              <h2 className="mt-2 font-serif text-2xl leading-snug">{questao.enunciado}</h2>
+              <p className="mt-4 text-sm text-muted">Sua resposta</p>
+              <p className="mt-1">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
+              <p className="mt-4 text-sm text-muted">Gabarito</p>
+              <p className="mt-1 font-serif text-xl leading-relaxed">{questao.resposta}</p>
+            </li>
+          ))}
+        </ol>
+        <button
+          type="button"
+          className="btn mt-4"
+          onClick={() => {
+            setProva(null);
+            setEncerrado(false);
+            setErro(null);
+          }}
+        >
+          Novo simulado
+        </button>
+      </div>
+    );
+  }
+
+  const atual = prova[Math.min(indice, prova.length - 1)];
+
+  return (
+    <div className="mt-6">
+      <p className="text-sm text-muted">
+        Questão {Math.min(indice, prova.length - 1) + 1} de {prova.length}. O gabarito aparece no fim.
+      </p>
+      <article className="cartao mt-3 p-5" key={atual.id}>
+        <p className="text-sm text-muted">
+          {atual.materiaNome} · {atual.blocoTitulo}
+        </p>
+        <h2 className="mt-4 font-serif text-3xl leading-snug">{atual.enunciado}</h2>
+        <label className="rotulo mt-6" htmlFor="resposta-simulado">
+          Sua resposta
+        </label>
+        <textarea
+          id="resposta-simulado"
+          className="campo min-h-28"
+          value={rascunhos[atual.id] ?? ""}
+          onChange={(evento) => setRascunhos((atuais) => ({ ...atuais, [atual.id]: evento.target.value }))}
+          placeholder="Escreva a resposta sem consultar o gabarito."
+        />
+      </article>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setIndice((atualIndice) => Math.max(0, atualIndice - 1))}
+          disabled={indice <= 0}
+        >
+          Anterior
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setIndice((atualIndice) => Math.min(prova.length - 1, atualIndice + 1))}
+          disabled={indice >= prova.length - 1}
+        >
+          Próxima
+        </button>
+        <button type="button" className="btn btn-primario" onClick={() => setEncerrado(true)}>
+          Ver gabarito
         </button>
       </div>
     </div>
