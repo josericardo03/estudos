@@ -184,6 +184,7 @@ export function LeitorPdf({
   const [colocandoPostit, setColocandoPostit] = useState(false);
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
+  const [ferramentas, setFerramentas] = useState(false);
   const estreita = useTelaEstreita();
   const [abriuNoCelular, setAbriuNoCelular] = useState(false);
   if (estreita && !abriuNoCelular) {
@@ -845,7 +846,30 @@ export function LeitorPdf({
         style={{ "--lado": `${painel === "caderno" ? larguraCaderno : larguraPainel}px` } as React.CSSProperties}
       >
       <div className={`flex h-full min-h-0 min-w-0 flex-col ${painel !== "oculto" ? "max-md:hidden" : ""}`}>
-        <div className="cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3">
+        {estreita && !ferramentas ? (
+          <div className="mx-2 mb-2 flex items-center gap-2">
+            <button type="button" className="btn" aria-label="Página anterior" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
+              ←
+            </button>
+            <span className="text-sm text-muted">
+              {paginaSegura} / {total}
+            </span>
+            <button type="button" className="btn" aria-label="Próxima página" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
+              →
+            </button>
+            <button type="button" className="btn ml-auto" onClick={() => setFerramentas(true)}>
+              Ferramentas
+            </button>
+          </div>
+        ) : null}
+        <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""}`}>
+          {estreita ? (
+            <div className="mb-2 flex justify-end">
+              <button type="button" className="btn" onClick={() => setFerramentas(false)}>
+                Ocultar
+              </button>
+            </div>
+          ) : null}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <label className="sr-only" htmlFor="numero-pagina">
