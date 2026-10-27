@@ -160,6 +160,7 @@ export function LeitorPdf({
   const origemMarca = useRef<{ x: number; y: number } | null>(null);
   const questoesDialogo = useRef<HTMLDialogElement>(null);
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
+  const desfazerRef = useRef<() => void>(() => {});
   const grifosAtuais = useRef<Grifo[]>([]);
 
   const [documento, setDocumento] = useState<DocumentoPdf | null>(null);
@@ -474,30 +475,7 @@ export function LeitorPdf({
       }
       if ((evento.ctrlKey || evento.metaKey) && !evento.shiftKey && evento.key.toLowerCase() === "z") {
         evento.preventDefault();
-        let alvo: { id: string; pagina: number } | undefined;
-        while (marcasParaDesfazer.current.length) {
-          const item = marcasParaDesfazer.current.pop();
-          if (item && grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
-            alvo = item;
-            break;
-          }
-        }
-        if (!alvo) {
-          setErro(null);
-          setAviso("Não há marcação para desfazer.");
-          return;
-        }
-        setPagina(alvo.pagina);
-        setCorMarca(null);
-        setTraco(null);
-        origemMarca.current = null;
-        void repo.grifos.remover(alvo.id).then(
-          () => {
-            setErro(null);
-            setAviso("Marcação desfeita.");
-          },
-          (falha) => setErro(mensagemErro(falha, "Não foi possível desfazer a marcação.")),
-        );
+        desfazerRef.current();
       }
     }
     window.addEventListener("keydown", aoTeclar);
@@ -560,6 +538,34 @@ export function LeitorPdf({
     setSelecao(null);
   }
 
+  function desfazerMarcacao() {
+    let alvo: { id: string; pagina: number } | undefined;
+    while (marcasParaDesfazer.current.length) {
+      const item = marcasParaDesfazer.current.pop();
+      if (item && grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
+        alvo = item;
+        break;
+      }
+    }
+    if (!alvo) {
+      setErro(null);
+      setAviso("Não há marcação para desfazer.");
+      return;
+    }
+    setPagina(alvo.pagina);
+    setCorMarca(null);
+    setTraco(null);
+    origemMarca.current = null;
+    void repo.grifos.remover(alvo.id).then(
+      () => {
+        setErro(null);
+        setAviso("Marcação desfeita.");
+      },
+      (falha) => setErro(mensagemErro(falha, "Não foi possível desfazer a marcação.")),
+    );
+  }
+  desfazerRef.current = desfazerMarcacao;
+
   function escolherCor(cor: CorGrifo) {
     setColocandoPostit(false);
     if (selecao) {
@@ -576,6 +582,7 @@ export function LeitorPdf({
     setCorMarca(cor);
     setErro(null);
     setAviso(null);
+    if (estreita) setFerramentas(false);
   }
 
   function pontoNaFolha(evento: React.PointerEvent<HTMLDivElement>) {
@@ -583,14 +590,16 @@ export function LeitorPdf({
     if (!folha) return null;
     const caixa = folha.getBoundingClientRect();
     if (caixa.width <= 0 || caixa.height <= 0) return null;
+    const yCliente = evento.pointerType === "touch" ? evento.clientY - 28 : evento.clientY;
     return {
       x: limitar((evento.clientX - caixa.left) / caixa.width, 0, 1),
-      y: limitar((evento.clientY - caixa.top) / caixa.height, 0, 1),
+      y: limitar((yCliente - caixa.top) / caixa.height, 0, 1),
     };
   }
 
   function aoMarcarDown(evento: React.PointerEvent<HTMLDivElement>) {
     if (!corMarca) return;
+    if (evento.pointerType === "touch") evento.preventDefault();
     const ponto = pontoNaFolha(evento);
     if (!ponto) return;
     origemMarca.current = ponto;
@@ -630,6 +639,14 @@ export function LeitorPdf({
       h: Math.max(h, 0.012),
     };
     const folha = folhaRef.current;
+    if (evento.pointerType === "touch" && folha) {
+      const alturaLinha = 26 / folha.getBoundingClientRect().height;
+      if (rect.h < alturaLinha) {
+        const centro = rect.y + rect.h / 2;
+        rect.y = Math.max(0, Math.min(centro - alturaLinha / 2, 1 - alturaLinha));
+        rect.h = Math.min(alturaLinha, 1 - rect.y);
+      }
+    }
     const extraido = folha ? textoSobRects(folha, [rect]).slice(0, 280) : "";
     const reserva = corMarca === IMPORTANTE.id ? `Figura · página ${paginaSegura}` : `Página ${paginaSegura}`;
     void gravarGrifo(corMarca, extraido || reserva, [rect]);
@@ -847,19 +864,58 @@ export function LeitorPdf({
       >
       <div className={`flex h-full min-h-0 min-w-0 flex-col ${painel !== "oculto" ? "max-md:hidden" : ""}`}>
         {estreita && !ferramentas ? (
-          <div className="mx-2 mb-2 flex items-center gap-2">
-            <button type="button" className="btn" aria-label="Página anterior" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
-              ←
-            </button>
-            <span className="text-sm text-muted">
-              {paginaSegura} / {total}
-            </span>
-            <button type="button" className="btn" aria-label="Próxima página" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
-              →
-            </button>
-            <button type="button" className="btn ml-auto" onClick={() => setFerramentas(true)}>
-              Ferramentas
-            </button>
+          <div className="mx-2 mb-2 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <button type="button" className="btn" aria-label="Página anterior" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
+                ←
+              </button>
+              <span className="text-sm text-muted">
+                {paginaSegura} / {total}
+              </span>
+              <button type="button" className="btn" aria-label="Próxima página" onClick={() => setPagina((atual) => Math.min(total, atual + 1))}>
+                →
+              </button>
+              <button type="button" className="btn ml-auto" onClick={() => desfazerRef.current()}>
+                Voltar
+              </button>
+              <button type="button" className="btn" onClick={() => setFerramentas(true)}>
+                Ferramentas
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Marcar">
+              {PRIORIDADES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="btn btn-cor"
+                  aria-pressed={corMarca === item.id}
+                  onClick={() => escolherCor(item.id)}
+                >
+                  <span className={`ponto ponto-${item.id}`} aria-hidden />
+                  {item.nome}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="btn btn-cor"
+                aria-pressed={corMarca === IMPORTANTE.id}
+                onClick={() => escolherCor(IMPORTANTE.id)}
+              >
+                <span className="ponto ponto-importante" aria-hidden />
+                {IMPORTANTE.nome}
+              </button>
+            </div>
+            {corMarca ? (
+              <p className="text-sm text-muted">
+                Arraste o dedo sobre o trecho. Toque de novo na cor para soltar.
+              </p>
+            ) : null}
+            {painel === "oculto" && (erro || aviso) ? (
+              <div>
+                {erro ? <Aviso texto={erro} /> : null}
+                {aviso ? <p className="text-sm text-pine">{aviso}</p> : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""}`}>
@@ -979,14 +1035,20 @@ export function LeitorPdf({
                 {IMPORTANTE.nome}
               </button>
             </div>
-            <span className="atalho ml-auto hidden sm:inline">Ctrl+Z</span>
+            {estreita ? (
+              <button type="button" className="btn" onClick={() => desfazerRef.current()}>
+                Voltar
+              </button>
+            ) : (
+              <span className="atalho ml-auto hidden sm:inline">Ctrl+Z</span>
+            )}
           </div>
           <p className="mt-2 text-sm text-muted sm:hidden">
             {corMarca === IMPORTANTE.id
-              ? "Arraste um quadrado. A área vai para o cadernão."
+              ? "Arraste o dedo em volta da figura. A área vai para o cadernão."
               : corMarca
-                ? "Arraste na página para grifar. Toque de novo na cor para soltar."
-                : "Escolha uma cor e arraste, ou selecione o texto."}
+                ? "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar. Voltar desfaz."
+                : "Escolha uma cor e arraste o dedo sobre o texto."}
           </p>
           <p className="mt-2 hidden text-sm text-muted sm:block">
               {corMarca === IMPORTANTE.id
@@ -1090,6 +1152,7 @@ export function LeitorPdf({
                   className="marca-camada"
                   role="group"
                   aria-label="Arraste para grifar nesta página"
+                  style={{ touchAction: "none" }}
                   onPointerDown={aoMarcarDown}
                   onPointerMove={aoMarcarMove}
                   onPointerUp={aoMarcarUp}
