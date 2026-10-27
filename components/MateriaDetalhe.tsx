@@ -4,11 +4,78 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ErroEstudo, mensagemErro, mensagemUpload } from "@/lib/erros";
+import type { PdfDoc } from "@/lib/types";
 import { contarPaginas } from "@/lib/pdf";
 import { repo } from "@/lib/repo";
 import { caminhoBanco, caminhoCaderno, caminhoPdf } from "@/lib/rotas";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "./ui";
+
+function LinhaPdf({ materiaId, pdf, blocos }: { materiaId: string; pdf: PdfDoc; blocos: number }) {
+  const [rascunho, setRascunho] = useState<string | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const nome = rascunho ?? pdf.nome;
+  const mudou = nome.trim() !== pdf.nome;
+
+  async function salvar(evento: React.FormEvent) {
+    evento.preventDefault();
+    if (!mudou) return;
+    setGuardando(true);
+    setErro(null);
+    try {
+      await repo.pdfs.renomear(pdf.id, nome);
+      setRascunho(null);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível renomear o PDF."));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <li className="py-4">
+      <form onSubmit={salvar} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <label className="sr-only" htmlFor={`nome-pdf-${pdf.id}`}>
+            Nome do PDF
+          </label>
+          <input
+            id={`nome-pdf-${pdf.id}`}
+            className="campo font-serif text-2xl"
+            value={nome}
+            onChange={(evento) => setRascunho(evento.target.value)}
+            autoComplete="off"
+          />
+          <p className="mt-1 text-sm text-muted">
+            {pdf.numPages} {pdf.numPages === 1 ? "página" : "páginas"}
+            {" · "}
+            {blocos} {blocos === 1 ? "bloco" : "blocos"}
+          </p>
+          {erro ? <div className="mt-2"><Aviso texto={erro} /></div> : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {mudou ? (
+            <button className="btn btn-primario" type="submit" disabled={guardando}>
+              {guardando ? "Salvando…" : "Salvar nome"}
+            </button>
+          ) : null}
+          <Link className="btn" href={caminhoPdf(materiaId, pdf.id)}>
+            Ler
+          </Link>
+          <Link className="btn" href={caminhoCaderno(materiaId, pdf.id)}>
+            Cadernão
+          </Link>
+          <Confirmar
+            rotulo="Excluir"
+            confirmar="Excluir PDF"
+            onConfirmar={() => repo.pdfs.remover(pdf.id)}
+          />
+        </div>
+      </form>
+    </li>
+  );
+}
 
 export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
   const router = useRouter();
@@ -137,31 +204,7 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
         ) : (
           <ul className="mt-4 divide-y divide-line border-y border-line">
             {dados.pdfs.map(({ pdf, blocos }) => (
-              <li key={pdf.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0 flex-1">
-                  <Link href={caminhoPdf(materiaId, pdf.id)} className="break-words font-serif text-2xl text-ink no-underline hover:underline">
-                    {pdf.nome}
-                  </Link>
-                  <p className="mt-1 text-sm text-muted">
-                    {pdf.numPages} {pdf.numPages === 1 ? "página" : "páginas"}
-                    {" · "}
-                    {blocos} {blocos === 1 ? "bloco" : "blocos"}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Link className="btn" href={caminhoPdf(materiaId, pdf.id)}>
-                    Ler
-                  </Link>
-                  <Link className="btn" href={caminhoCaderno(materiaId, pdf.id)}>
-                    Cadernão
-                  </Link>
-                  <Confirmar
-                    rotulo="Excluir"
-                    confirmar="Excluir PDF"
-                    onConfirmar={() => repo.pdfs.remover(pdf.id)}
-                  />
-                </div>
-              </li>
+              <LinhaPdf key={pdf.id} materiaId={materiaId} pdf={pdf} blocos={blocos} />
             ))}
           </ul>
         )}

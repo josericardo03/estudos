@@ -1,8 +1,9 @@
-// As telas só conversam com este módulo. O banco do Supabase está em
-// supabase/schema.sql. Enquanto as variáveis do Supabase estiverem vazias,
-// os dados ficam no IndexedDB deste navegador (lib/db.ts).
+// As telas só conversam com este módulo. Com URL e chave no .env.local,
+// os dados vão para o Supabase. Sem essas variáveis, ficam no IndexedDB.
 
 import { getDb } from "./db";
+import { repoRemoto } from "./repoRemoto";
+import { supabaseConfigurado } from "./supabase";
 import { ErroEstudo } from "./erros";
 import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
 import type {
@@ -52,7 +53,7 @@ function ordenarBlocos(lista: Bloco[]) {
   return lista.sort((a, b) => a.paginaInicio - b.paginaInicio || a.createdAt - b.createdAt);
 }
 
-export const repo = {
+const repoLocal = {
   materias: {
     async listar(): Promise<Materia[]> {
       const lista = await getDb().materias.toArray();
@@ -108,7 +109,7 @@ export const repo = {
       const lista = await getDb().pdfs.where("materiaId").equals(materiaId).toArray();
       return lista.sort((a, b) => a.createdAt - b.createdAt);
     },
-    async obter(pdfId: string): Promise<PdfDoc | null> {
+    async obter(pdfId: string, _opcoes?: { arquivo?: boolean }): Promise<PdfDoc | null> {
       return (await getDb().pdfs.get(pdfId)) ?? null;
     },
     async criar(entrada: {
@@ -130,6 +131,11 @@ export const repo = {
       };
       await getDb().pdfs.add(pdf);
       return pdf;
+    },
+    async renomear(pdfId: string, nome: string) {
+      const limpo = exigirNome(nome, "O PDF precisa de um nome.");
+      const alterados = await getDb().pdfs.update(pdfId, { nome: limpo });
+      if (!alterados) throw new ErroEstudo("PDF não encontrado.");
     },
     async remover(pdfId: string) {
       const db = getDb();
@@ -491,3 +497,9 @@ function limitar(valor: number, minimo: number, maximo: number) {
   if (!Number.isFinite(valor)) return minimo;
   return Math.min(maximo, Math.max(minimo, valor));
 }
+
+function escolherRepo() {
+  return supabaseConfigurado() ? repoRemoto : repoLocal;
+}
+
+export const repo = escolherRepo();

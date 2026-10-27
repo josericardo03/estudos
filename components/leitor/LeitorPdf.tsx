@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { mensagemErro, mensagemPdf } from "@/lib/erros";
 import { blocoDaPagina, descreverFaixa } from "@/lib/faixa";
-import { abrirDocumento, carregarPdfjs, escalaCss, type DocumentoPdf } from "@/lib/pdf";
+import { abrirDocumento, carregarPdfjs, escalaCss, medidaNitida, type DocumentoPdf } from "@/lib/pdf";
 import { normalizarRects } from "@/lib/rects";
 import { repo } from "@/lib/repo";
 import { caminhoBloco, caminhoMateria } from "@/lib/rotas";
@@ -15,7 +15,7 @@ import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "../ui";
 
 type Selecao = { texto: string; rects: Rect[]; x: number; y: number };
-type Medida = { w: number; h: number; escala: number; pagina: number };
+type Medida = { w: number; h: number; escala: number; pagina: number; roundX: number; roundY: number };
 type Rascunho = { id: string; x: number; y: number };
 
 function cancelado(erro: unknown) {
@@ -209,7 +209,7 @@ export function LeitorPdf({
   }
 
   const { dados: arquivo, pronto: arquivoPronto, erro: erroArquivo } = useConsulta(
-    () => repo.pdfs.obter(pdfId),
+    () => repo.pdfs.obter(pdfId, { arquivo: true }),
     [pdfId],
     null,
   );
@@ -290,7 +290,7 @@ export function LeitorPdf({
       docIdRef.current = null;
       void doc?.loadingTask.destroy();
     };
-  }, [arquivo]);
+  }, [arquivo?.id, arquivo?.blob]);
 
   useEffect(() => {
     const palco = palcoRef.current;
@@ -301,7 +301,10 @@ export function LeitorPdf({
     const medir = () => {
       if (!ativo || ajusteManual.current) return;
       const atual = ++pedido;
-      const largura = Math.max(280, palco.clientWidth - 32);
+      const estilo = getComputedStyle(palco);
+      const folga =
+        parseFloat(estilo.paddingLeft) + parseFloat(estilo.paddingRight) + parseFloat(estilo.borderLeftWidth) + parseFloat(estilo.borderRightWidth);
+      const largura = Math.max(280, palco.clientWidth - folga - 16);
       void documento.getPage(paginaSegura).then((page) => {
         if (!ativo || ajusteManual.current || atual !== pedido) {
           page.cleanup();
@@ -348,23 +351,29 @@ export function LeitorPdf({
         tarefa.page = page;
         if (canceladoRender) return;
         const viewport = page.getViewport({ scale: escalaCss(escala) });
-        folha.style.width = `${viewport.width}px`;
-        folha.style.height = `${viewport.height}px`;
+        const nitida = medidaNitida(viewport.width, viewport.height, window.devicePixelRatio || 1);
+        folha.style.width = `${nitida.cssLargura}px`;
+        folha.style.height = `${nitida.cssAltura}px`;
         folha.style.setProperty("--scale-factor", String(viewport.scale));
+        folha.style.setProperty("--scale-round-x", `${nitida.roundX}px`);
+        folha.style.setProperty("--scale-round-y", `${nitida.roundY}px`);
         setMedida({
-          w: viewport.width,
-          h: viewport.height,
+          w: nitida.cssLargura,
+          h: nitida.cssAltura,
           escala: viewport.scale,
           pagina: paginaSegura,
+          roundX: nitida.roundX,
+          roundY: nitida.roundY,
         });
 
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * dpr);
-        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.width = nitida.canvasLargura;
+        canvas.height = nitida.canvasAltura;
+        canvas.style.width = `${nitida.cssLargura}px`;
+        canvas.style.height = `${nitida.cssAltura}px`;
         const renderizacao = page.render({
           canvas,
           viewport,
-          transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+          transform: [nitida.sx, 0, 0, nitida.sy, 0, 0],
         });
         tarefa.render = renderizacao;
         if (canceladoRender) {
@@ -975,8 +984,11 @@ export function LeitorPdf({
               style={{
                 width: medidaAtual?.w,
                 height: medidaAtual?.h,
+                flexShrink: 0,
                 opacity: pronta && medidaAtual ? 1 : 0,
                 ["--scale-factor" as string]: medidaAtual ? String(medidaAtual.escala) : "1",
+                ["--scale-round-x" as string]: medidaAtual ? `${medidaAtual.roundX}px` : "1px",
+                ["--scale-round-y" as string]: medidaAtual ? `${medidaAtual.roundY}px` : "1px",
               }}
             >
               <canvas ref={canvasRef} className="folha-canvas" role="presentation" />

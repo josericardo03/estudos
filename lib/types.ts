@@ -20,7 +20,7 @@ export type PdfDoc = {
   id: string;
   materiaId: string;
   nome: string;
-  blob: Blob;
+  blob?: Blob;
   numPages: number;
   createdAt: number;
 };

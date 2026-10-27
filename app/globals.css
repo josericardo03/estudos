@@ -363,6 +363,7 @@ main {
   --scale-round-x: 1px;
   --scale-round-y: 1px;
   position: relative;
+  flex-shrink: 0;
   margin-inline: auto;
   background: white;
   border-radius: 0.85rem;
@@ -373,9 +374,8 @@ main {
 
 .folha-canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
   display: block;
 }
 
