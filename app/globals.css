@@ -507,6 +507,22 @@ a.citacao {
   touch-action: none;
 }
 
+.trilho-grifo {
+  position: relative;
+}
+
+.cores-flutuantes {
+  display: none;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.trilho-grifo:hover .cores-flutuantes,
+.trilho-grifo:focus-within .cores-flutuantes {
+  display: flex;
+}
+
 .popup {
   width: min(36rem, calc(100vw - 2rem));
   max-height: min(40rem, calc(100dvh - 2rem));

@@ -152,6 +152,7 @@ export function LeitorPdf({
   marcaInicial?: string | null;
 }) {
   const palcoRef = useRef<HTMLDivElement>(null);
+  const trilhoRef = useRef<HTMLDivElement>(null);
   const folhaRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textoRef = useRef<HTMLDivElement>(null);
@@ -307,7 +308,8 @@ export function LeitorPdf({
       const estilo = getComputedStyle(palco);
       const folga =
         parseFloat(estilo.paddingLeft) + parseFloat(estilo.paddingRight) + parseFloat(estilo.borderLeftWidth) + parseFloat(estilo.borderRightWidth);
-      const largura = Math.max(280, palco.clientWidth - folga - 16);
+      const trilho = trilhoRef.current?.offsetWidth ?? 0;
+      const largura = Math.max(280, palco.clientWidth - folga - 16 - trilho);
       void documento.getPage(paginaSegura).then((page) => {
         if (!ativo || ajusteManual.current || atual !== pedido) {
           page.cleanup();
@@ -330,7 +332,7 @@ export function LeitorPdf({
       observer.disconnect();
       cancelAnimationFrame(quadro);
     };
-  }, [documento, paginaSegura]);
+  }, [documento, paginaSegura, barra, estreita]);
 
   useEffect(() => {
     const folha = folhaRef.current;
@@ -919,13 +921,6 @@ export function LeitorPdf({
             ) : null}
           </div>
         ) : null}
-        {!estreita && !barra ? (
-          <div className="mx-5 mb-2 flex justify-end">
-            <button type="button" className="btn" onClick={() => setBarra(true)}>
-              Marcações
-            </button>
-          </div>
-        ) : null}
         <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""} ${!estreita && !barra ? "hidden" : ""}`}>
           <div className="mb-2 flex justify-end">
             <button type="button" className="btn" onClick={() => (estreita ? setFerramentas(false) : setBarra(false))}>
@@ -1067,8 +1062,67 @@ export function LeitorPdf({
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
         <div
           ref={palcoRef}
-          className="flex min-h-0 flex-1 justify-center overflow-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5"
+          className="flex min-h-0 flex-1 items-start justify-center overflow-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5"
         >
+          {!estreita && !barra ? (
+            <div ref={trilhoRef} className="sticky top-8 z-20 mr-3 flex w-[7.5rem] shrink-0 flex-col gap-2 self-start">
+              <button
+                type="button"
+                className="btn"
+                aria-label="Página anterior"
+                disabled={paginaSegura <= 1}
+                onClick={() => setPagina((atual) => Math.max(1, atual - 1))}
+              >
+                ↑
+              </button>
+              <span className="text-center text-sm text-muted">
+                {paginaSegura} / {total}
+              </span>
+              <button
+                type="button"
+                className="btn"
+                aria-label="Próxima página"
+                disabled={paginaSegura >= total}
+                onClick={() => setPagina((atual) => Math.min(total, atual + 1))}
+              >
+                ↓
+              </button>
+              <div className="trilho-grifo" data-barra-grifo>
+                <button type="button" className="btn w-full" aria-pressed={corMarca !== null} aria-haspopup="true">
+                  {corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
+                  Grifar
+                </button>
+                <div className="cores-flutuantes">
+                  {PRIORIDADES.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="btn btn-cor"
+                      aria-pressed={corMarca === item.id}
+                      onMouseDown={(evento) => evento.preventDefault()}
+                      onClick={() => escolherCor(item.id)}
+                    >
+                      <span className={`ponto ponto-${item.id}`} aria-hidden />
+                      {item.nome}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn btn-cor"
+                    aria-pressed={corMarca === IMPORTANTE.id}
+                    onMouseDown={(evento) => evento.preventDefault()}
+                    onClick={() => escolherCor(IMPORTANTE.id)}
+                  >
+                    <span className="ponto ponto-importante" aria-hidden />
+                    {IMPORTANTE.nome}
+                  </button>
+                </div>
+              </div>
+              <button type="button" className="btn" onClick={() => setBarra(true)}>
+                Marcações
+              </button>
+            </div>
+          ) : null}
           {documento ? (
             <div
               ref={folhaRef}
