@@ -186,6 +186,7 @@ export function LeitorPdf({
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
   const [ferramentas, setFerramentas] = useState(false);
+  const [barra, setBarra] = useState(true);
   const estreita = useTelaEstreita();
   const [abriuNoCelular, setAbriuNoCelular] = useState(false);
   if (estreita && !abriuNoCelular) {
@@ -918,14 +919,19 @@ export function LeitorPdf({
             ) : null}
           </div>
         ) : null}
-        <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""}`}>
-          {estreita ? (
-            <div className="mb-2 flex justify-end">
-              <button type="button" className="btn" onClick={() => setFerramentas(false)}>
-                Ocultar
-              </button>
-            </div>
-          ) : null}
+        {!estreita && !barra ? (
+          <div className="mx-5 mb-2 flex justify-end">
+            <button type="button" className="btn" onClick={() => setBarra(true)}>
+              Marcações
+            </button>
+          </div>
+        ) : null}
+        <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""} ${!estreita && !barra ? "hidden" : ""}`}>
+          <div className="mb-2 flex justify-end">
+            <button type="button" className="btn" onClick={() => (estreita ? setFerramentas(false) : setBarra(false))}>
+              Ocultar
+            </button>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <label className="sr-only" htmlFor="numero-pagina">
