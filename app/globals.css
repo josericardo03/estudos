@@ -244,6 +244,12 @@ main {
   background: var(--pine-soft);
 }
 
+.selo-alta {
+  border-color: var(--alta);
+  color: var(--alta);
+  background: var(--alta-soft);
+}
+
 .marca {
   display: inline-flex;
   align-items: center;

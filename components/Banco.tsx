@@ -5,9 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useRef, useState } from "react";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { aplicarJulgamento, compararRevisao, descreverVolta, limitarSimulado, proximaData, separarSimulado } from "@/lib/revisao";
+import { aplicarJulgamento, compararRevisao, descreverVolta, ehGargalo, limitarSimulado, proximaData, separarSimulado } from "@/lib/revisao";
 import { caminhoBloco } from "@/lib/rotas";
-import type { Materia, Questao, StatusRevisao } from "@/lib/types";
+import type { Materia, Questao, StatusRevisao, Tentativa } from "@/lib/types";
 import { STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
@@ -108,6 +108,15 @@ export function Banco() {
   );
 }
 
+function AvisoGargalo() {
+  return (
+    <p className="mt-3 text-sm text-alta">
+      <span className="selo selo-alta mr-2">Gargalo</span>
+      Três erros seguidos. Releia a teoria deste trecho antes de insistir na questão.
+    </p>
+  );
+}
+
 function Baralho({ materiaId }: { materiaId: string }) {
   const [indice, setIndice] = useState(0);
   const [mostrar, setMostrar] = useState(false);
@@ -139,6 +148,7 @@ function Baralho({ materiaId }: { materiaId: string }) {
       })
       .filter((cartao): cartao is Cartao => Boolean(cartao));
   }, [materiaId], []);
+  const { dados: tentativas } = useConsulta(() => repo.tentativas.listar(), [], [] as Tentativa[]);
 
   if (!pronto) return <Abrindo texto="Abrindo as questões…" />;
   if (erroLeitura) return <div className="mt-6"><Aviso texto={erroLeitura} /></div>;
@@ -173,6 +183,7 @@ function Baralho({ materiaId }: { materiaId: string }) {
           {atual.materiaNome} · {atual.blocoTitulo}
         </p>
         <h2 className="mt-4 font-serif text-3xl leading-snug">{atual.enunciado}</h2>
+        {ehGargalo(tentativas, atual.id) ? <AvisoGargalo /> : null}
         {mostrar ? (
           <p className="mt-6 border-t border-line pt-4 font-serif text-xl leading-relaxed">{atual.resposta}</p>
         ) : (
@@ -241,6 +252,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [sobraram, setSobraram] = useState(0);
   const [pedido, setPedido] = useState<number | null>(null);
   const [julgamentos, setJulgamentos] = useState<Record<string, { acertou: boolean; texto: string }>>({});
+  const [historico, setHistorico] = useState<Tentativa[]>([]);
   const tentativasDaProva = useRef<Record<string, string>>({});
   const ids = escolhidas ?? materias.map((materia) => materia.id);
   const todas = materias.length > 0 && materias.every((materia) => ids.includes(materia.id));
@@ -262,7 +274,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     }
     setGerando(true);
     try {
-      const cartoes = await carregarCartoes(ids);
+      const [cartoes, tentativas] = await Promise.all([carregarCartoes(ids), repo.tentativas.listar()]);
       if (!cartoes.length) {
         setErro("Nenhuma questão nessas matérias.");
         return;
@@ -285,6 +297,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
       setSobraram(restantes);
       setPedido(pedidoNumero);
       setJulgamentos({});
+      setHistorico(tentativas);
       tentativasDaProva.current = {};
       setProva(embaralhar(selecionadas));
       setIndice(0);
@@ -310,6 +323,16 @@ function Simulado({ materias }: { materias: Materia[] }) {
         blocoId: questao.blocoId,
         acertou,
       });
+      const registrada: Tentativa = {
+        id: idTentativa,
+        questaoId: questao.id,
+        pdfId: questao.pdfId,
+        materiaId: questao.materiaId,
+        blocoId: questao.blocoId,
+        acertou,
+        em: Date.now(),
+      };
+      setHistorico((atuais) => [...atuais.filter((item) => item.id !== idTentativa), registrada]);
       setJulgamentos((atuais) => ({
         ...atuais,
         [questao.id]: { acertou, texto: descreverVolta(agenda.proximaEm) },
@@ -332,7 +355,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
         <fieldset>
           <legend className="rotulo">Matérias do simulado</legend>
           <p className="mb-3 text-sm text-muted">
-            Entram as questões que estão no banco. Acerto empurra a próxima vez. Erro deixa a questão para o simulado seguinte.
+            As vagas se dividem entre as matérias. Em cada uma, um quarto é erro, metade é questão nova e um quarto é dominada que já voltou. Se faltar alguma, a vaga passa adiante.
           </p>
           <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
             <input
@@ -367,7 +390,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
             onChange={(evento) => setQuantidade(evento.target.value)}
           />
           <p className="mt-2 text-sm text-muted">
-            No máximo essas, entre as que já voltaram. Se houver menos, o simulado fica com as que tem. As que você errou entram primeiro.
+            No máximo essas, entre as que já voltaram. Se houver menos, o simulado fica com as que tem.
           </p>
         </div>
         <button className="btn btn-primario mt-4" type="submit" disabled={gerando || materias.length === 0}>
@@ -382,7 +405,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     return (
       <div className="mt-6">
         <p className="text-sm text-muted">
-          {respondidas} de {prova.length} com resposta escrita. Marque cada uma: o acerto adia, o erro continua no banco.
+          {respondidas} de {prova.length} com resposta escrita. O acerto aumenta o intervalo. O erro devolve a questão ao próximo simulado.
         </p>
         {erro ? <div className="mt-4"><Aviso texto={erro} /></div> : null}
         <ol className="mt-4 flex flex-col gap-3">
@@ -392,6 +415,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
                 {posicao + 1}. {questao.materiaNome} · {questao.blocoTitulo}
               </p>
               <h2 className="mt-2 font-serif text-2xl leading-snug">{questao.enunciado}</h2>
+              {ehGargalo(historico, questao.id) ? <AvisoGargalo /> : null}
               <p className="mt-4 text-sm text-muted">Sua resposta</p>
               <p className="mt-1">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
               <p className="mt-4 text-sm text-muted">Gabarito</p>
@@ -448,6 +472,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
           {atual.materiaNome} · {atual.blocoTitulo}
         </p>
         <h2 className="mt-4 font-serif text-3xl leading-snug">{atual.enunciado}</h2>
+        {ehGargalo(historico, atual.id) ? <AvisoGargalo /> : null}
         <label className="rotulo mt-6" htmlFor="resposta-simulado">
           Sua resposta
         </label>
