@@ -38,6 +38,98 @@ function porcentagemZoom(escala: number) {
   return String(Math.round(escala * 100));
 }
 
+function spansDeTexto(folha: HTMLElement) {
+  return [...folha.querySelectorAll<HTMLElement>(".textLayer span")].filter((span) => {
+    if (!span.textContent?.trim()) return false;
+    const caixa = span.getBoundingClientRect();
+    return caixa.width > 0.5 && caixa.height > 0.5;
+  });
+}
+
+function rectNormalizado(folha: HTMLElement, left: number, top: number, right: number, bottom: number): Rect {
+  const caixa = folha.getBoundingClientRect();
+  const largura = Math.max(caixa.width, 1);
+  const altura = Math.max(caixa.height, 1);
+  const x = limitar((left - caixa.left) / largura, 0, 1);
+  const y = limitar((top - caixa.top) / altura, 0, 1);
+  return {
+    x,
+    y,
+    w: limitar((right - left) / largura, 0, 1 - x),
+    h: limitar((bottom - top) / altura, 0, 1 - y),
+  };
+}
+
+function unirSpans(folha: HTMLElement, spans: HTMLElement[]): Rect | null {
+  if (!spans.length) return null;
+  let left = Infinity;
+  let right = -Infinity;
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const span of spans) {
+    const caixa = span.getBoundingClientRect();
+    left = Math.min(left, caixa.left);
+    right = Math.max(right, caixa.right);
+    top = Math.min(top, caixa.top);
+    bottom = Math.max(bottom, caixa.bottom);
+  }
+  if (!Number.isFinite(left) || right - left < 1) return null;
+  return rectNormalizado(folha, left, top, right, bottom);
+}
+
+function linhaSobPonto(folha: HTMLElement, clienteX: number, clienteY: number): Rect | null {
+  const spans = spansDeTexto(folha);
+  if (!spans.length) return null;
+  let melhor: HTMLElement | null = null;
+  let distancia = Infinity;
+  for (const span of spans) {
+    const caixa = span.getBoundingClientRect();
+    const folga = Math.max(8, caixa.height * 0.45);
+    if (clienteY < caixa.top - folga || clienteY > caixa.bottom + folga) continue;
+    const centro = caixa.top + caixa.height / 2;
+    const fora =
+      clienteX < caixa.left ? caixa.left - clienteX : clienteX > caixa.right ? clienteX - caixa.right : 0;
+    const nota = Math.abs(clienteY - centro) + fora * 0.2;
+    if (nota < distancia) {
+      distancia = nota;
+      melhor = span;
+    }
+  }
+  if (!melhor) return null;
+  const base = melhor.getBoundingClientRect();
+  const meio = base.top + base.height / 2;
+  if (Math.abs(clienteY - meio) > Math.max(18, base.height * 0.9)) return null;
+  const tolerancia = Math.max(3, base.height * 0.45);
+  const daLinha = spans.filter((span) => {
+    const caixa = span.getBoundingClientRect();
+    return Math.abs(caixa.top + caixa.height / 2 - meio) <= tolerancia;
+  });
+  return unirSpans(folha, daLinha);
+}
+
+function linhasEntre(folha: HTMLElement, yInicio: number, yFim: number): Rect[] {
+  const spans = spansDeTexto(folha);
+  const topo = Math.min(yInicio, yFim);
+  const baixo = Math.max(yInicio, yFim);
+  const grupos: HTMLElement[][] = [];
+  for (const span of spans) {
+    const caixa = span.getBoundingClientRect();
+    const centro = caixa.top + caixa.height / 2;
+    if (centro < topo - 4 || centro > baixo + 4) continue;
+    const grupo = grupos.find((itens) => {
+      const referencia = itens[0].getBoundingClientRect();
+      const meio = referencia.top + referencia.height / 2;
+      return Math.abs(centro - meio) <= Math.max(3, referencia.height * 0.45);
+    });
+    if (grupo) grupo.push(span);
+    else grupos.push([span]);
+  }
+  return grupos.flatMap((grupo) => {
+    const rect = unirSpans(folha, grupo);
+    return rect ? [rect] : [];
+  });
+}
+
 function textoSobRects(folha: HTMLElement, rects: Rect[]) {
   const caixa = folha.getBoundingClientRect();
   const zonas = rects.map((rect) => ({
@@ -159,6 +251,7 @@ export function LeitorPdf({
   const docIdRef = useRef<string | null>(null);
   const ajusteManual = useRef(false);
   const origemMarca = useRef<{ x: number; y: number } | null>(null);
+  const inicioToque = useRef<{ x: number; y: number } | null>(null);
   const questoesDialogo = useRef<HTMLDialogElement>(null);
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
   const desfazerRef = useRef<() => void>(() => {});
@@ -544,14 +637,36 @@ export function LeitorPdf({
     setSelecao(null);
   }
 
+  function mesmaLinha(rect: Rect, outro: Rect) {
+    const centro = rect.y + rect.h / 2;
+    const outroCentro = outro.y + outro.h / 2;
+    const tolerancia = Math.max(rect.h, outro.h) * 0.45;
+    const sobrepoe = rect.x < outro.x + outro.w && outro.x < rect.x + rect.w;
+    return Math.abs(centro - outroCentro) <= tolerancia && sobrepoe;
+  }
+
   function anotarRisco(rects: Rect[]) {
     const id = crypto.randomUUID();
     setRiscos((atuais) => [...atuais, { id, pagina: paginaSegura, rects }]);
     marcasParaDesfazer.current.push({ id: `risco:${id}`, pagina: paginaSegura });
     setErro(null);
-    setAviso("Sublinhado só nesta leitura. Não entra no cadernão.");
+    setAviso("Linha sublinhada. Toque de novo para tirar.");
     setSublinhar(true);
     setCorMarca(null);
+  }
+
+  function alternarLinha(rect: Rect) {
+    const existente = riscos.find(
+      (risco) => risco.pagina === paginaSegura && risco.rects.some((outro) => mesmaLinha(rect, outro)),
+    );
+    if (existente) {
+      setRiscos((atuais) => atuais.filter((risco) => risco.id !== existente.id));
+      marcasParaDesfazer.current = marcasParaDesfazer.current.filter((item) => item.id !== `risco:${existente.id}`);
+      setErro(null);
+      setAviso("Sublinhado tirado.");
+      return;
+    }
+    anotarRisco([rect]);
   }
 
   function desfazerMarcacao() {
@@ -644,10 +759,16 @@ export function LeitorPdf({
     const ponto = pontoNaFolha(evento);
     if (!ponto) return;
     origemMarca.current = ponto;
+    inicioToque.current = { x: evento.clientX, y: evento.clientY };
     try {
       evento.currentTarget.setPointerCapture(evento.pointerId);
     } catch {
       /* o navegador recusa a captura fora de um ponteiro real */
+    }
+    if (sublinhando) {
+      const folha = folhaRef.current;
+      setTraco(folha ? linhaSobPonto(folha, evento.clientX, evento.clientY) : null);
+      return;
     }
     setTraco({ x: ponto.x, y: ponto.y, w: 0, h: 0 });
   }
@@ -656,6 +777,11 @@ export function LeitorPdf({
     const origem = origemMarca.current;
     const ponto = pontoNaFolha(evento);
     if (!origem || !ponto) return;
+    if (sublinhando) {
+      const folha = folhaRef.current;
+      setTraco(folha ? linhaSobPonto(folha, evento.clientX, evento.clientY) : null);
+      return;
+    }
     setTraco({
       x: Math.min(origem.x, ponto.x),
       y: Math.min(origem.y, ponto.y),
@@ -666,10 +792,40 @@ export function LeitorPdf({
 
   function aoMarcarUp(evento: React.PointerEvent<HTMLDivElement>) {
     const origem = origemMarca.current;
+    const inicio = inicioToque.current;
     origemMarca.current = null;
+    inicioToque.current = null;
     const ponto = pontoNaFolha(evento);
     setTraco(null);
-    if (!origem || !ponto || (!corMarca && !sublinhando)) return;
+    if (sublinhando) {
+      const folha = folhaRef.current;
+      if (!folha || !inicio) return;
+      const arrastou = Math.hypot(evento.clientX - inicio.x, evento.clientY - inicio.y) > 12;
+      if (!arrastou) {
+        const linha = linhaSobPonto(folha, evento.clientX, evento.clientY);
+        if (!linha) {
+          setErro(null);
+          setAviso("Toque em cima do texto da linha.");
+          return;
+        }
+        alternarLinha(linha);
+        return;
+      }
+      const linhas = linhasEntre(folha, inicio.y, evento.clientY);
+      if (!linhas.length) {
+        setErro(null);
+        setAviso("Toque em cima do texto da linha.");
+        return;
+      }
+      for (const linha of linhas) {
+        const jaTem = riscos.some(
+          (risco) => risco.pagina === paginaSegura && risco.rects.some((outro) => mesmaLinha(linha, outro)),
+        );
+        if (!jaTem) anotarRisco([linha]);
+      }
+      return;
+    }
+    if (!origem || !ponto || !corMarca) return;
     const w = Math.abs(ponto.x - origem.x);
     const h = Math.abs(ponto.y - origem.y);
     if (w < 0.012 && h < 0.012) return;
@@ -687,10 +843,6 @@ export function LeitorPdf({
         rect.y = Math.max(0, Math.min(centro - alturaLinha / 2, 1 - alturaLinha));
         rect.h = Math.min(alturaLinha, 1 - rect.y);
       }
-    }
-    if (sublinhando) {
-      anotarRisco([rect]);
-      return;
     }
     if (!corMarca) return;
     const extraido = folha ? textoSobRects(folha, [rect]).slice(0, 280) : "";
@@ -960,10 +1112,10 @@ export function LeitorPdf({
                 Sublinhar
               </button>
             </div>
-            {corMarca ? (
+            {corMarca || sublinhando ? (
               <p className="text-sm text-muted">
                 {sublinhando
-                  ? "Arraste sob a linha. O risco fica só nesta leitura."
+                  ? "Toque na linha para sublinhar. Toque de novo para tirar."
                   : "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar."}
               </p>
             ) : null}
@@ -1110,21 +1262,21 @@ export function LeitorPdf({
           </div>
           <p className="mt-2 text-sm text-muted sm:hidden">
             {sublinhando
-              ? "Arraste sob a linha. O risco fica só nesta leitura."
+              ? "Toque na linha para sublinhar. Toque de novo para tirar."
               : corMarca === IMPORTANTE.id
               ? "Arraste o dedo em volta da figura. A área vai para o cadernão."
               : corMarca
                 ? "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar. Voltar desfaz."
-                : "Escolha uma cor, ou Sublinhar, e arraste o dedo sobre o texto."}
+                : "Escolha uma cor e arraste, ou toque em Sublinhar e depois na linha."}
           </p>
           <p className="mt-2 hidden text-sm text-muted sm:block">
               {sublinhando
-                ? "Selecione o texto ou arraste embaixo da linha. O risco fica só nesta leitura e não entra no cadernão."
+                ? "Clique na linha para sublinhar. Clique de novo na mesma linha para tirar. O risco fica só nesta leitura."
                 : corMarca === IMPORTANTE.id
                 ? "Arraste um quadrado em volta do trecho ou da figura. A área vai como imagem para o cadernão. Clique de novo, ou Esc, para soltar."
                 : corMarca
                   ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
-                  : "Clique numa cor e arraste na página. Sublinhar põe um risco só nesta leitura, sem gravar. Se houver texto selecionado, a marcação usa esse trecho. Ctrl+Z desfaz a última marcação."}
+                  : "Clique numa cor e arraste na página. Sublinhar: clique na linha e o risco aparece embaixo dela. Ctrl+Z desfaz a última marcação."}
           </p>
         </div>
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
@@ -1305,7 +1457,7 @@ export function LeitorPdf({
                 <div
                   className="marca-camada"
                   role="group"
-                  aria-label={sublinhando ? "Arraste para sublinhar nesta página" : "Arraste para grifar nesta página"}
+                  aria-label={sublinhando ? "Toque na linha para sublinhar" : "Arraste para grifar nesta página"}
                   style={{ touchAction: "none" }}
                   onPointerDown={aoMarcarDown}
                   onPointerMove={aoMarcarMove}
