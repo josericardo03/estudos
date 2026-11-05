@@ -2,6 +2,14 @@
 
 :root {
   --header-h: calc(4rem + env(safe-area-inset-top, 0px));
+}
+html[data-leitura-foco] {
+  --header-h: 0px;
+}
+html[data-leitura-foco] .app-nav {
+  display: none;
+}
+:root {
   --paper: #f3f0e8;
   --sheet: #ffffff;
   --ink: #1c241f;

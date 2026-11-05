@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { mensagemErro, mensagemPdf } from "@/lib/erros";
 import { blocoDaPagina, descreverFaixa } from "@/lib/faixa";
 import { abrirDocumento, carregarPdfjs, escalaCss, medidaNitida, type DocumentoPdf } from "@/lib/pdf";
@@ -327,6 +327,14 @@ export function LeitorPdf({
   useEffect(() => {
     grifosAtuais.current = grifos;
   }, [grifos]);
+
+  useLayoutEffect(() => {
+    if (!modoFoco) return;
+    document.documentElement.dataset.leituraFoco = "1";
+    return () => {
+      delete document.documentElement.dataset.leituraFoco;
+    };
+  }, [modoFoco]);
 
   const total = documento?.numPages ?? arquivo?.numPages ?? 1;
   const paginaNumero = Number.isFinite(pagina) ? pagina : 1;
@@ -1050,7 +1058,7 @@ export function LeitorPdf({
   }
 
   return (
-    <div className="flex h-[calc(100dvh-var(--header-h))] min-h-0 flex-col overflow-hidden bg-paper">
+    <div className={`flex min-h-0 flex-col overflow-hidden bg-paper ${modoFoco ? "h-dvh pt-[env(safe-area-inset-top,0px)]" : "h-[calc(100dvh-var(--header-h))]"}`}>
       <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link href={caminhoMateria(materiaId)} className="selo selo-pine max-w-[42vw] shrink overflow-hidden rounded-full no-underline sm:max-w-52">

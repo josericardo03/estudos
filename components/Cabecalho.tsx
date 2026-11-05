@@ -23,7 +23,7 @@ export function Cabecalho() {
   const leitor = caminho.match(/^(\/materias\/[^/]+\/pdfs\/[^/]+)/)?.[1];
   return (
     <header
-      className="sticky top-0 z-30 border-b border-line bg-[#f7f4ee]/95 backdrop-blur"
+      className="app-nav sticky top-0 z-30 border-b border-line bg-[#f7f4ee]/95 backdrop-blur"
       style={{ height: "var(--header-h)", paddingTop: "env(safe-area-inset-top, 0px)" }}
     >
       <div className="flex h-16 items-center gap-2 px-3 sm:gap-3 sm:px-6">
