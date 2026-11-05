@@ -285,6 +285,7 @@ export function LeitorPdf({
   const [barra, setBarra] = useState(true);
   const [modoFoco, setModoFoco] = useState(false);
   const [menuGrifo, setMenuGrifo] = useState(false);
+  const [escrevendoPostit, setEscrevendoPostit] = useState(false);
   const estreita = useTelaEstreita();
   const [abriuNoCelular, setAbriuNoCelular] = useState(false);
   if (estreita && !abriuNoCelular) {
@@ -939,6 +940,9 @@ export function LeitorPdf({
       return;
     }
     setCorMarca(null);
+    setSublinhar(false);
+    setMenuGrifo(false);
+    setEscrevendoPostit(false);
     setColocandoPostit(true);
     setAviso("Clique no ponto da página. A bolinha fica nesse ponto.");
   }
@@ -958,6 +962,7 @@ export function LeitorPdf({
         y: ponto.y,
       });
       setPostit("");
+      setEscrevendoPostit(false);
       setAviso("Post-it marcado nesse ponto.");
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível fixar o post-it."));
@@ -1395,7 +1400,10 @@ export function LeitorPdf({
                   aria-pressed={corMarca !== null || sublinhando}
                   aria-expanded={menuGrifo}
                   aria-haspopup="true"
-                  onClick={() => setMenuGrifo((atual) => !atual)}
+                  onClick={() => {
+                    setEscrevendoPostit(false);
+                    setMenuGrifo((atual) => !atual);
+                  }}
                 >
                   {sublinhando ? <span className="ponto ponto-esconder" aria-hidden /> : corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
                   Grifar
@@ -1435,6 +1443,58 @@ export function LeitorPdf({
                     Esconder
                   </button>
                 </div>
+              </div>
+              <div className="trilho-postit">
+                <button
+                  type="button"
+                  className="btn w-full"
+                  aria-pressed={escrevendoPostit || colocandoPostit}
+                  aria-expanded={escrevendoPostit}
+                  onClick={() => {
+                    if (escrevendoPostit || colocandoPostit) {
+                      setEscrevendoPostit(false);
+                      setColocandoPostit(false);
+                      return;
+                    }
+                    setMenuGrifo(false);
+                    setCorMarca(null);
+                    setSublinhar(false);
+                    setEscrevendoPostit(true);
+                  }}
+                >
+                  Post-it
+                </button>
+                {escrevendoPostit ? (
+                  <form className="postit-flutuante" onSubmit={fixarPostit}>
+                    <label className="sr-only" htmlFor="postit-trilho">
+                      Texto do post-it
+                    </label>
+                    <textarea
+                      id="postit-trilho"
+                      className="campo min-h-20"
+                      placeholder="Nota neste ponto da página"
+                      value={postit}
+                      onChange={(evento) => setPostit(evento.target.value)}
+                      autoComplete="off"
+                    />
+                    {erro ? <p className="text-sm text-alta">{erro}</p> : null}
+                    <button className="btn w-full" type="submit">
+                      {colocandoPostit ? "Toque na página…" : "Fixar na página"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn w-full"
+                      onClick={() => {
+                        setEscrevendoPostit(false);
+                        setColocandoPostit(false);
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  </form>
+                ) : colocandoPostit ? (
+                  <p className="text-center text-xs leading-tight text-muted">Toque na página</p>
+                ) : null}
               </div>
               <button
                 type="button"

@@ -575,6 +575,24 @@ a.citacao {
   flex: 1 1 auto;
 }
 
+.trilho-postit {
+  position: relative;
+}
+.postit-flutuante {
+  position: absolute;
+  left: calc(100% + 0.45rem);
+  top: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.4rem;
+  width: min(16rem, calc(100vw - 9.5rem));
+  padding: 0.6rem;
+  border: 1px solid #e4d48a;
+  border-radius: 0.8rem;
+  background: var(--note);
+  box-shadow: 0 8px 24px rgb(40 28 16 / 0.16);
+}
+
 .trilho-grifo {
   position: relative;
 }
