@@ -207,12 +207,11 @@ main {
   border: 1.5px solid var(--ink);
   border-radius: 0.1rem;
 }
-.ponto-sublinhado {
+.ponto-esconder {
   width: 0.7rem;
-  height: 0.15rem;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: inset 0 -2px 0 var(--ink);
+  height: 0.45rem;
+  border-radius: 0.1rem;
+  background: var(--ink);
 }
 
 .btn-cor[aria-pressed="true"] {
@@ -446,14 +445,17 @@ main {
   background: rgb(17 24 20 / 0.18);
   box-shadow: inset 0 0 0 2px var(--ink);
 }
-.grifo-sublinhado {
-  mix-blend-mode: normal;
-  background: transparent;
-  box-shadow: inset 0 -2.5px 0 var(--ink);
+.tapa-linha {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: #fff;
+  box-shadow: 0 0 0 3px #fff, inset 0 0 0 1px #cfc8bc;
+  border-radius: 2px;
 }
-.grifo-vivo.grifo-sublinhado {
-  background: transparent;
-  box-shadow: inset 0 -2.5px 0 var(--ink);
+.tapa-linha-viva {
+  background: #fff;
+  box-shadow: 0 0 0 3px #fff, inset 0 0 0 2px var(--ink);
 }
 
 .btn-seta {
@@ -549,6 +551,22 @@ a.citacao {
   touch-action: none;
 }
 
+.zoom-trilho {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.zoom-trilho .btn {
+  min-width: 1.65rem;
+  padding-inline: 0.3rem;
+}
+.zoom-trilho .campo-zoom {
+  width: 2.45rem;
+  max-width: 2.45rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .trilho-grifo {
   position: relative;
 }
@@ -560,6 +578,7 @@ a.citacao {
   margin-top: 0.35rem;
 }
 
+.trilho-grifo.aberto .cores-flutuantes,
 .trilho-grifo:hover .cores-flutuantes,
 .trilho-grifo:focus-within .cores-flutuantes {
   display: flex;

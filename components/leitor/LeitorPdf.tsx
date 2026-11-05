@@ -283,6 +283,8 @@ export function LeitorPdf({
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
   const [ferramentas, setFerramentas] = useState(false);
   const [barra, setBarra] = useState(true);
+  const [modoFoco, setModoFoco] = useState(false);
+  const [menuGrifo, setMenuGrifo] = useState(false);
   const estreita = useTelaEstreita();
   const [abriuNoCelular, setAbriuNoCelular] = useState(false);
   if (estreita && !abriuNoCelular) {
@@ -650,7 +652,7 @@ export function LeitorPdf({
     setRiscos((atuais) => [...atuais, { id, pagina: paginaSegura, rects }]);
     marcasParaDesfazer.current.push({ id: `risco:${id}`, pagina: paginaSegura });
     setErro(null);
-    setAviso("Linha sublinhada. Toque de novo para tirar.");
+    setAviso("Linha escondida. Toque de novo para mostrar.");
     setSublinhar(true);
     setCorMarca(null);
   }
@@ -663,7 +665,7 @@ export function LeitorPdf({
       setRiscos((atuais) => atuais.filter((risco) => risco.id !== existente.id));
       marcasParaDesfazer.current = marcasParaDesfazer.current.filter((item) => item.id !== `risco:${existente.id}`);
       setErro(null);
-      setAviso("Sublinhado tirado.");
+      setAviso("Linha de volta.");
       return;
     }
     anotarRisco([rect]);
@@ -678,7 +680,7 @@ export function LeitorPdf({
         const riscoId = item.id.slice("risco:".length);
         setRiscos((atuais) => atuais.filter((risco) => risco.id !== riscoId));
         setErro(null);
-        setAviso("Sublinhado desfeito.");
+        setAviso("Linha de volta.");
         return;
       }
       if (grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
@@ -707,6 +709,7 @@ export function LeitorPdf({
 
   function escolherRisco() {
     setColocandoPostit(false);
+    setMenuGrifo(false);
     setCorMarca(null);
     if (selecao) {
       anotarRisco(selecao.rects);
@@ -723,6 +726,7 @@ export function LeitorPdf({
 
   function escolherCor(cor: CorGrifo) {
     setColocandoPostit(false);
+    setMenuGrifo(false);
     setSublinhar(false);
     if (selecao) {
       void grifar(cor);
@@ -739,6 +743,21 @@ export function LeitorPdf({
     setErro(null);
     setAviso(null);
     if (estreita) setFerramentas(false);
+  }
+
+  function entrarFoco() {
+    setModoFoco(true);
+    setPainel("oculto");
+    setBarra(false);
+    setFerramentas(false);
+    setMenuGrifo(false);
+  }
+
+  function sairFoco() {
+    setModoFoco(false);
+    setBarra(true);
+    setFerramentas(false);
+    setMenuGrifo(false);
   }
 
   function pontoNaFolha(evento: React.PointerEvent<HTMLDivElement>) {
@@ -805,7 +824,7 @@ export function LeitorPdf({
         const linha = linhaSobPonto(folha, evento.clientX, evento.clientY);
         if (!linha) {
           setErro(null);
-          setAviso("Toque em cima do texto da linha.");
+          setAviso("Toque em cima da linha que quer esconder.");
           return;
         }
         alternarLinha(linha);
@@ -814,7 +833,7 @@ export function LeitorPdf({
       const linhas = linhasEntre(folha, inicio.y, evento.clientY);
       if (!linhas.length) {
         setErro(null);
-        setAviso("Toque em cima do texto da linha.");
+        setAviso("Toque em cima da linha que quer esconder.");
         return;
       }
       for (const linha of linhas) {
@@ -1041,14 +1060,17 @@ export function LeitorPdf({
           {painel === "caderno" ? <span className="selo hidden rounded-full sm:inline-flex">PDF interativo</span> : null}
         </div>
         <div className="flex w-full flex-wrap gap-2 sm:w-auto" role="group" aria-label="O que fica ao lado do PDF">
-          <button type="button" className="btn btn-seletor" aria-pressed={painel === "oculto"} onClick={() => setPainel("oculto")}>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "oculto" && !modoFoco} onClick={() => { sairFoco(); setPainel("oculto"); }}>
             Só o PDF
           </button>
-          <button type="button" className="btn btn-seletor" aria-pressed={painel === "anotacoes"} onClick={() => setPainel("anotacoes")}>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "anotacoes"} onClick={() => { sairFoco(); setPainel("anotacoes"); }}>
             Painel
           </button>
-          <button type="button" className="btn btn-seletor" aria-pressed={painel === "caderno"} onClick={() => setPainel("caderno")}>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "caderno"} onClick={() => { sairFoco(); setPainel("caderno"); }}>
             Cadernão
+          </button>
+          <button type="button" className="btn btn-seletor" aria-pressed={modoFoco} onClick={() => (modoFoco ? sairFoco() : entrarFoco())}>
+            Foco
           </button>
         </div>
       </div>
@@ -1061,7 +1083,7 @@ export function LeitorPdf({
         style={{ "--lado": `${painel === "caderno" ? larguraCaderno : larguraPainel}px` } as React.CSSProperties}
       >
       <div className={`flex h-full min-h-0 min-w-0 flex-col ${painel !== "oculto" ? "max-md:hidden" : ""}`}>
-        {estreita && !ferramentas ? (
+        {estreita && !ferramentas && !modoFoco ? (
           <div className="mx-2 mb-2 flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <button type="button" className="btn" aria-label="Página anterior" onClick={() => setPagina((atual) => Math.max(1, atual - 1))}>
@@ -1108,14 +1130,14 @@ export function LeitorPdf({
                 aria-pressed={sublinhando}
                 onClick={escolherRisco}
               >
-                <span className="ponto ponto-sublinhado" aria-hidden />
-                Sublinhar
+                <span className="ponto ponto-esconder" aria-hidden />
+                Esconder
               </button>
             </div>
             {corMarca || sublinhando ? (
               <p className="text-sm text-muted">
                 {sublinhando
-                  ? "Toque na linha para sublinhar. Toque de novo para tirar."
+                  ? "Toque na linha da resposta para esconder. Toque de novo para mostrar."
                   : "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar."}
               </p>
             ) : null}
@@ -1127,7 +1149,7 @@ export function LeitorPdf({
             ) : null}
           </div>
         ) : null}
-        <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""} ${!estreita && !barra ? "hidden" : ""}`}>
+        <div className={`cartao mx-2 mb-2 px-2 py-2 sm:mx-5 sm:mb-3 sm:px-3 sm:py-3 ${estreita && !ferramentas ? "hidden" : ""} ${!estreita && !barra ? "hidden" : ""} ${modoFoco && ((estreita && !ferramentas) || (!estreita && !barra)) ? "hidden" : ""}`}>
           <div className="mb-2 flex justify-end">
             <button type="button" className="btn" onClick={() => (estreita ? setFerramentas(false) : setBarra(false))}>
               Ocultar
@@ -1248,8 +1270,8 @@ export function LeitorPdf({
                 onMouseDown={(evento) => evento.preventDefault()}
                 onClick={escolherRisco}
               >
-                <span className="ponto ponto-sublinhado" aria-hidden />
-                Sublinhar
+                <span className="ponto ponto-esconder" aria-hidden />
+                Esconder
               </button>
             </div>
             {estreita ? (
@@ -1262,21 +1284,21 @@ export function LeitorPdf({
           </div>
           <p className="mt-2 text-sm text-muted sm:hidden">
             {sublinhando
-              ? "Toque na linha para sublinhar. Toque de novo para tirar."
+              ? "Toque na linha da resposta para esconder. Toque de novo para mostrar."
               : corMarca === IMPORTANTE.id
               ? "Arraste o dedo em volta da figura. A área vai para o cadernão."
               : corMarca
                 ? "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar. Voltar desfaz."
-                : "Escolha uma cor e arraste, ou toque em Sublinhar e depois na linha."}
+                : "Escolha uma cor e arraste, ou toque em Esconder e depois na linha da resposta."}
           </p>
           <p className="mt-2 hidden text-sm text-muted sm:block">
               {sublinhando
-                ? "Clique na linha para sublinhar. Clique de novo na mesma linha para tirar. O risco fica só nesta leitura."
+                ? "Clique na linha da resposta para cobrir o texto. Clique de novo para mostrar. Some só nesta leitura."
                 : corMarca === IMPORTANTE.id
                 ? "Arraste um quadrado em volta do trecho ou da figura. A área vai como imagem para o cadernão. Clique de novo, ou Esc, para soltar."
                 : corMarca
                   ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
-                  : "Clique numa cor e arraste na página. Sublinhar: clique na linha e o risco aparece embaixo dela. Ctrl+Z desfaz a última marcação."}
+                  : "Clique numa cor e arraste na página. Esconder cobre a linha clicada, para você responder sem ler. Ctrl+Z desfaz."}
           </p>
         </div>
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
@@ -1284,11 +1306,11 @@ export function LeitorPdf({
           ref={palcoRef}
           className="flex min-h-0 flex-1 items-start justify-center overflow-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5"
         >
-          {!estreita && !barra ? (
+          {(modoFoco ? (estreita ? !ferramentas : !barra) : !estreita && !barra) ? (
             <div ref={trilhoRef} className="sticky top-8 z-20 mr-3 flex w-[7.5rem] shrink-0 flex-col gap-2 self-start">
               <button
                 type="button"
-                className="btn"
+                className="btn w-full"
                 aria-label="Página anterior"
                 disabled={paginaSegura <= 1}
                 onClick={() => setPagina((atual) => Math.max(1, atual - 1))}
@@ -1300,16 +1322,74 @@ export function LeitorPdf({
               </span>
               <button
                 type="button"
-                className="btn"
+                className="btn w-full"
                 aria-label="Próxima página"
                 disabled={paginaSegura >= total}
                 onClick={() => setPagina((atual) => Math.min(total, atual + 1))}
               >
                 ↓
               </button>
-              <div className="trilho-grifo" data-barra-grifo>
-                <button type="button" className="btn w-full" aria-pressed={corMarca !== null || sublinhando} aria-haspopup="true">
-                  {sublinhando ? <span className="ponto ponto-sublinhado" aria-hidden /> : corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
+              <div className="zoom-trilho">
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label="Diminuir zoom"
+                  onClick={() => {
+                    ajusteManual.current = true;
+                    setEscala((atual) => Number(Math.max(ZOOM_MIN, atual - 0.15).toFixed(2)));
+                  }}
+                >
+                  −
+                </button>
+                <label className="sr-only" htmlFor="zoom-trilho">
+                  Zoom
+                </label>
+                <input
+                  id="zoom-trilho"
+                  className="campo campo-zoom"
+                  inputMode="numeric"
+                  aria-describedby="zoom-trilho-unidade"
+                  value={zoomRascunho ?? porcentagemZoom(escala)}
+                  onFocus={(evento) => {
+                    setZoomRascunho(porcentagemZoom(escala));
+                    evento.target.select();
+                  }}
+                  onChange={(evento) => setZoomRascunho(evento.target.value)}
+                  onBlur={(evento) => {
+                    if (evento.target instanceof HTMLInputElement) aplicarZoom(evento.target.value);
+                  }}
+                  onKeyDown={(evento) => {
+                    if (evento.key !== "Enter") return;
+                    evento.preventDefault();
+                    aplicarZoom(evento.currentTarget.value);
+                    evento.currentTarget.blur();
+                  }}
+                />
+                <span id="zoom-trilho-unidade" className="text-sm text-muted">
+                  %
+                </span>
+                <button
+                  type="button"
+                  className="btn"
+                  aria-label="Aumentar zoom"
+                  onClick={() => {
+                    ajusteManual.current = true;
+                    setEscala((atual) => Number(Math.min(ZOOM_MAX, atual + 0.15).toFixed(2)));
+                  }}
+                >
+                  +
+                </button>
+              </div>
+              <div className={`trilho-grifo${menuGrifo ? " aberto" : ""}`} data-barra-grifo>
+                <button
+                  type="button"
+                  className="btn w-full"
+                  aria-pressed={corMarca !== null || sublinhando}
+                  aria-expanded={menuGrifo}
+                  aria-haspopup="true"
+                  onClick={() => setMenuGrifo((atual) => !atual)}
+                >
+                  {sublinhando ? <span className="ponto ponto-esconder" aria-hidden /> : corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
                   Grifar
                 </button>
                 <div className="cores-flutuantes">
@@ -1343,12 +1423,16 @@ export function LeitorPdf({
                     onMouseDown={(evento) => evento.preventDefault()}
                     onClick={escolherRisco}
                   >
-                    <span className="ponto ponto-sublinhado" aria-hidden />
-                    Sublinhar
+                    <span className="ponto ponto-esconder" aria-hidden />
+                    Esconder
                   </button>
                 </div>
               </div>
-              <button type="button" className="btn" onClick={() => setBarra(true)}>
+              <button
+                type="button"
+                className="btn w-full"
+                onClick={() => (estreita ? setFerramentas(true) : setBarra(true))}
+              >
                 Marcações
               </button>
             </div>
@@ -1384,22 +1468,6 @@ export function LeitorPdf({
                     />
                   )),
                 )}
-                {riscos
-                  .filter((risco) => risco.pagina === paginaSegura)
-                  .flatMap((risco) =>
-                    risco.rects.map((rect, indice) => (
-                      <span
-                        key={`${risco.id}-${indice}`}
-                        className="grifo grifo-sublinhado"
-                        style={{
-                          left: `${rect.x * 100}%`,
-                          top: `${rect.y * 100}%`,
-                          width: `${rect.w * 100}%`,
-                          height: `${rect.h * 100}%`,
-                        }}
-                      />
-                    )),
-                  )}
               </div>
               {selecao && !corMarca ? (
                 <div className="pointer-events-none absolute inset-0 z-[4]">
@@ -1445,6 +1513,24 @@ export function LeitorPdf({
                   window.addEventListener("mouseup", soltar);
                 }}
               />
+              <div className="pointer-events-none absolute inset-0 z-[5]">
+                {riscos
+                  .filter((risco) => risco.pagina === paginaSegura)
+                  .flatMap((risco) =>
+                    risco.rects.map((rect, indice) => (
+                      <span
+                        key={`${risco.id}-${indice}`}
+                        className="tapa-linha"
+                        style={{
+                          left: `${rect.x * 100}%`,
+                          top: `${rect.y * 100}%`,
+                          width: `${rect.w * 100}%`,
+                          height: `${rect.h * 100}%`,
+                        }}
+                      />
+                    )),
+                  )}
+              </div>
               {colocandoPostit ? (
                 <div
                   className="marca-camada"
@@ -1457,7 +1543,7 @@ export function LeitorPdf({
                 <div
                   className="marca-camada"
                   role="group"
-                  aria-label={sublinhando ? "Toque na linha para sublinhar" : "Arraste para grifar nesta página"}
+                  aria-label={sublinhando ? "Toque na linha para esconder" : "Arraste para grifar nesta página"}
                   style={{ touchAction: "none" }}
                   onPointerDown={aoMarcarDown}
                   onPointerMove={aoMarcarMove}
@@ -1465,7 +1551,7 @@ export function LeitorPdf({
                 >
                   {traco && traco.w > 0 && traco.h > 0 ? (
                     <span
-                      className={sublinhando ? "grifo grifo-vivo grifo-sublinhado" : `grifo grifo-vivo grifo-${corMarca}`}
+                      className={sublinhando ? "tapa-linha tapa-linha-viva" : `grifo grifo-vivo grifo-${corMarca}`}
                       style={{
                         left: `${traco.x * 100}%`,
                         top: `${traco.y * 100}%`,
