@@ -10,7 +10,7 @@ import { caminhoCaderno, caminhoMateria, caminhoPdf } from "@/lib/rotas";
 import type { PostIt, Questao } from "@/lib/types";
 import { MAX_QUESTOES, STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
-import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado, RecorteGrifo } from "./ui";
+import { Abrindo, Aviso, Confirmar, MarcaPrioridade, NaoEncontrado, QuestaoConferencia, RecorteGrifo } from "./ui";
 
 export function BlocoDetalhe({
   materiaId,
@@ -306,6 +306,7 @@ function QuestaoEditor({
 }) {
   const [enunciado, setEnunciado] = useState(questao.enunciado);
   const [resposta, setResposta] = useState(questao.resposta);
+  const [editando, setEditando] = useState(false);
   const [visto, setVisto] = useState(`${questao.enunciado}\n${questao.resposta}`);
   const atual = `${questao.enunciado}\n${questao.resposta}`;
   if (atual !== visto) {
@@ -314,6 +315,30 @@ function QuestaoEditor({
     setResposta(questao.resposta);
   }
   const sujo = enunciado !== questao.enunciado || resposta !== questao.resposta;
+  const status = STATUS_REVISAO.find((item) => item.id === questao.statusRevisao)?.nome;
+
+  if (!editando) {
+    return (
+      <article className="border border-line bg-sheet p-3">
+        <QuestaoConferencia
+          indice={indice}
+          enunciado={questao.enunciado}
+          resposta={questao.resposta}
+          extra={<span className="selo">{status}</span>}
+        />
+        <div className="mt-3 flex flex-wrap gap-2 pl-12">
+          <button type="button" className="btn" onClick={() => setEditando(true)}>
+            Editar
+          </button>
+          <Confirmar
+            rotulo="Excluir questão"
+            confirmar="Excluir"
+            onConfirmar={() => repo.questoes.remover(questao.id)}
+          />
+        </div>
+      </article>
+    );
+  }
 
   return (
     <form
@@ -322,20 +347,22 @@ function QuestaoEditor({
         evento.preventDefault();
         void repo.questoes
           .atualizar(questao.id, { enunciado, resposta })
+          .then(() => setEditando(false))
           .catch((falha) => onErro(mensagemErro(falha, "Não foi possível salvar a questão.")));
       }}
     >
       <div className="flex items-center justify-between">
         <h3 className="font-serif text-xl">Questão {indice}</h3>
-        <span className="selo">
-          {STATUS_REVISAO.find((status) => status.id === questao.statusRevisao)?.nome}
-        </span>
+        <span className="selo">{status}</span>
       </div>
       <textarea className="campo min-h-20" value={enunciado} onChange={(evento) => setEnunciado(evento.target.value)} />
       <textarea className="campo min-h-16" value={resposta} onChange={(evento) => setResposta(evento.target.value)} />
       <div className="flex flex-wrap gap-2">
         <button className="btn" type="submit" disabled={!sujo}>
           Salvar alterações
+        </button>
+        <button type="button" className="btn" onClick={() => setEditando(false)}>
+          Voltar ao estudo
         </button>
         <Confirmar
           rotulo="Excluir questão"

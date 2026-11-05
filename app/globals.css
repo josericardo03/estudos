@@ -207,6 +207,13 @@ main {
   border: 1.5px solid var(--ink);
   border-radius: 0.1rem;
 }
+.ponto-sublinhado {
+  width: 0.7rem;
+  height: 0.15rem;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--ink);
+}
 
 .btn-cor[aria-pressed="true"] {
   box-shadow: inset 0 0 0 1.5px var(--pine);
@@ -343,6 +350,7 @@ main {
   background: #fff;
 }
 
+
 .recorte-grifo {
   display: block;
   max-width: 100%;
@@ -437,6 +445,34 @@ main {
 .grifo-vivo.grifo-importante {
   background: rgb(17 24 20 / 0.18);
   box-shadow: inset 0 0 0 2px var(--ink);
+}
+.grifo-sublinhado {
+  mix-blend-mode: normal;
+  background: transparent;
+  box-shadow: inset 0 -2.5px 0 var(--ink);
+}
+.grifo-vivo.grifo-sublinhado {
+  background: transparent;
+  box-shadow: inset 0 -2.5px 0 var(--ink);
+}
+
+.btn-seta {
+  width: 2.15rem;
+  padding-inline: 0;
+}
+
+.seta {
+  display: block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.seta-aberta {
+  transform: rotate(45deg);
 }
 
 .marca-foco {

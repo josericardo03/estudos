@@ -12,7 +12,7 @@ import { Caderno } from "../Caderno";
 import type { CorGrifo, Grifo, PostIt, Questao, Rect } from "@/lib/types";
 import { IMPORTANTE, MAX_QUESTOES, PRIORIDADES, nomeDaCor } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
-import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "../ui";
+import { Abrindo, Aviso, Confirmar, NaoEncontrado, QuestaoConferencia } from "../ui";
 
 type Selecao = { texto: string; rects: Rect[]; x: number; y: number };
 type Medida = { w: number; h: number; escala: number; pagina: number; roundX: number; roundY: number };
@@ -181,6 +181,8 @@ export function LeitorPdf({
   const [inicio, setInicio] = useState(String(Math.max(1, paginaInicial || 1)));
   const [fim, setFim] = useState(String(Math.max(1, paginaInicial || 1)));
   const [corMarca, setCorMarca] = useState<CorGrifo | null>(null);
+  const [sublinhando, setSublinhar] = useState(false);
+  const [riscos, setRiscos] = useState<{ id: string; pagina: number; rects: Rect[] }[]>([]);
   const [traco, setTraco] = useState<Rect | null>(null);
   const [postit, setPostit] = useState("");
   const [colocandoPostit, setColocandoPostit] = useState(false);
@@ -473,6 +475,7 @@ export function LeitorPdf({
       }
       if (evento.key === "Escape") {
         setCorMarca(null);
+        setSublinhar(false);
         setColocandoPostit(false);
         setPostitAberto(null);
       }
@@ -541,11 +544,29 @@ export function LeitorPdf({
     setSelecao(null);
   }
 
+  function anotarRisco(rects: Rect[]) {
+    const id = crypto.randomUUID();
+    setRiscos((atuais) => [...atuais, { id, pagina: paginaSegura, rects }]);
+    marcasParaDesfazer.current.push({ id: `risco:${id}`, pagina: paginaSegura });
+    setErro(null);
+    setAviso("Sublinhado só nesta leitura. Não entra no cadernão.");
+    setSublinhar(true);
+    setCorMarca(null);
+  }
+
   function desfazerMarcacao() {
     let alvo: { id: string; pagina: number } | undefined;
     while (marcasParaDesfazer.current.length) {
       const item = marcasParaDesfazer.current.pop();
-      if (item && grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
+      if (!item) continue;
+      if (item.id.startsWith("risco:")) {
+        const riscoId = item.id.slice("risco:".length);
+        setRiscos((atuais) => atuais.filter((risco) => risco.id !== riscoId));
+        setErro(null);
+        setAviso("Sublinhado desfeito.");
+        return;
+      }
+      if (grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
         alvo = item;
         break;
       }
@@ -569,8 +590,25 @@ export function LeitorPdf({
   }
   desfazerRef.current = desfazerMarcacao;
 
+  function escolherRisco() {
+    setColocandoPostit(false);
+    setCorMarca(null);
+    if (selecao) {
+      anotarRisco(selecao.rects);
+      window.getSelection()?.removeAllRanges();
+      setSelecao(null);
+      return;
+    }
+    setSublinhar((atual) => !atual);
+    setTraco(null);
+    origemMarca.current = null;
+    setAviso(null);
+    if (estreita) setFerramentas(false);
+  }
+
   function escolherCor(cor: CorGrifo) {
     setColocandoPostit(false);
+    setSublinhar(false);
     if (selecao) {
       void grifar(cor);
       return;
@@ -601,7 +639,7 @@ export function LeitorPdf({
   }
 
   function aoMarcarDown(evento: React.PointerEvent<HTMLDivElement>) {
-    if (!corMarca) return;
+    if (!corMarca && !sublinhando) return;
     if (evento.pointerType === "touch") evento.preventDefault();
     const ponto = pontoNaFolha(evento);
     if (!ponto) return;
@@ -631,7 +669,7 @@ export function LeitorPdf({
     origemMarca.current = null;
     const ponto = pontoNaFolha(evento);
     setTraco(null);
-    if (!origem || !ponto || !corMarca) return;
+    if (!origem || !ponto || (!corMarca && !sublinhando)) return;
     const w = Math.abs(ponto.x - origem.x);
     const h = Math.abs(ponto.y - origem.y);
     if (w < 0.012 && h < 0.012) return;
@@ -650,6 +688,11 @@ export function LeitorPdf({
         rect.h = Math.min(alturaLinha, 1 - rect.y);
       }
     }
+    if (sublinhando) {
+      anotarRisco([rect]);
+      return;
+    }
+    if (!corMarca) return;
     const extraido = folha ? textoSobRects(folha, [rect]).slice(0, 280) : "";
     const reserva = corMarca === IMPORTANTE.id ? `Figura · página ${paginaSegura}` : `Página ${paginaSegura}`;
     void gravarGrifo(corMarca, extraido || reserva, [rect]);
@@ -907,10 +950,21 @@ export function LeitorPdf({
                 <span className="ponto ponto-importante" aria-hidden />
                 {IMPORTANTE.nome}
               </button>
+              <button
+                type="button"
+                className="btn btn-cor"
+                aria-pressed={sublinhando}
+                onClick={escolherRisco}
+              >
+                <span className="ponto ponto-sublinhado" aria-hidden />
+                Sublinhar
+              </button>
             </div>
             {corMarca ? (
               <p className="text-sm text-muted">
-                Arraste o dedo sobre o trecho. Toque de novo na cor para soltar.
+                {sublinhando
+                  ? "Arraste sob a linha. O risco fica só nesta leitura."
+                  : "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar."}
               </p>
             ) : null}
             {painel === "oculto" && (erro || aviso) ? (
@@ -1035,6 +1089,16 @@ export function LeitorPdf({
                 <span className="ponto ponto-importante" aria-hidden />
                 {IMPORTANTE.nome}
               </button>
+              <button
+                type="button"
+                className="btn btn-cor"
+                aria-pressed={sublinhando}
+                onMouseDown={(evento) => evento.preventDefault()}
+                onClick={escolherRisco}
+              >
+                <span className="ponto ponto-sublinhado" aria-hidden />
+                Sublinhar
+              </button>
             </div>
             {estreita ? (
               <button type="button" className="btn" onClick={() => desfazerRef.current()}>
@@ -1045,18 +1109,22 @@ export function LeitorPdf({
             )}
           </div>
           <p className="mt-2 text-sm text-muted sm:hidden">
-            {corMarca === IMPORTANTE.id
+            {sublinhando
+              ? "Arraste sob a linha. O risco fica só nesta leitura."
+              : corMarca === IMPORTANTE.id
               ? "Arraste o dedo em volta da figura. A área vai para o cadernão."
               : corMarca
                 ? "Arraste o dedo sobre o trecho. Toque de novo na cor para soltar. Voltar desfaz."
-                : "Escolha uma cor e arraste o dedo sobre o texto."}
+                : "Escolha uma cor, ou Sublinhar, e arraste o dedo sobre o texto."}
           </p>
           <p className="mt-2 hidden text-sm text-muted sm:block">
-              {corMarca === IMPORTANTE.id
+              {sublinhando
+                ? "Selecione o texto ou arraste embaixo da linha. O risco fica só nesta leitura e não entra no cadernão."
+                : corMarca === IMPORTANTE.id
                 ? "Arraste um quadrado em volta do trecho ou da figura. A área vai como imagem para o cadernão. Clique de novo, ou Esc, para soltar."
                 : corMarca
                   ? "Arraste na página para grifar uma área. Clique de novo na cor, ou Esc, para soltar. Ctrl+Z desfaz a última marcação."
-                  : "Clique numa cor e arraste na página. Se houver trecho selecionado, a cor grifa o trecho. Importante põe um quadrado em volta e leva figuras junto. Ctrl+Z desfaz a última marcação."}
+                  : "Clique numa cor e arraste na página. Sublinhar põe um risco só nesta leitura, sem gravar. Se houver texto selecionado, a marcação usa esse trecho. Ctrl+Z desfaz a última marcação."}
           </p>
         </div>
         {erroLeitura ? <div className="px-4 pb-3"><Aviso texto={erroLeitura} /></div> : null}
@@ -1088,8 +1156,8 @@ export function LeitorPdf({
                 ↓
               </button>
               <div className="trilho-grifo" data-barra-grifo>
-                <button type="button" className="btn w-full" aria-pressed={corMarca !== null} aria-haspopup="true">
-                  {corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
+                <button type="button" className="btn w-full" aria-pressed={corMarca !== null || sublinhando} aria-haspopup="true">
+                  {sublinhando ? <span className="ponto ponto-sublinhado" aria-hidden /> : corMarca ? <span className={`ponto ponto-${corMarca}`} aria-hidden /> : null}
                   Grifar
                 </button>
                 <div className="cores-flutuantes">
@@ -1115,6 +1183,16 @@ export function LeitorPdf({
                   >
                     <span className="ponto ponto-importante" aria-hidden />
                     {IMPORTANTE.nome}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-cor"
+                    aria-pressed={sublinhando}
+                    onMouseDown={(evento) => evento.preventDefault()}
+                    onClick={escolherRisco}
+                  >
+                    <span className="ponto ponto-sublinhado" aria-hidden />
+                    Sublinhar
                   </button>
                 </div>
               </div>
@@ -1154,6 +1232,22 @@ export function LeitorPdf({
                     />
                   )),
                 )}
+                {riscos
+                  .filter((risco) => risco.pagina === paginaSegura)
+                  .flatMap((risco) =>
+                    risco.rects.map((rect, indice) => (
+                      <span
+                        key={`${risco.id}-${indice}`}
+                        className="grifo grifo-sublinhado"
+                        style={{
+                          left: `${rect.x * 100}%`,
+                          top: `${rect.y * 100}%`,
+                          width: `${rect.w * 100}%`,
+                          height: `${rect.h * 100}%`,
+                        }}
+                      />
+                    )),
+                  )}
               </div>
               {selecao && !corMarca ? (
                 <div className="pointer-events-none absolute inset-0 z-[4]">
@@ -1207,11 +1301,11 @@ export function LeitorPdf({
                   onPointerUp={soltarPostit}
                 />
               ) : null}
-              {corMarca ? (
+              {corMarca || sublinhando ? (
                 <div
                   className="marca-camada"
                   role="group"
-                  aria-label="Arraste para grifar nesta página"
+                  aria-label={sublinhando ? "Arraste para sublinhar nesta página" : "Arraste para grifar nesta página"}
                   style={{ touchAction: "none" }}
                   onPointerDown={aoMarcarDown}
                   onPointerMove={aoMarcarMove}
@@ -1219,7 +1313,7 @@ export function LeitorPdf({
                 >
                   {traco && traco.w > 0 && traco.h > 0 ? (
                     <span
-                      className={`grifo grifo-vivo grifo-${corMarca}`}
+                      className={sublinhando ? "grifo grifo-vivo grifo-sublinhado" : `grifo grifo-vivo grifo-${corMarca}`}
                       style={{
                         left: `${traco.x * 100}%`,
                         top: `${traco.y * 100}%`,
@@ -1612,16 +1706,16 @@ export function LeitorPdf({
                         onCancelar={() => setEditandoQuestao(null)}
                       />
                     ) : (
-                      <>
-                        <div className="flex items-start justify-between gap-3">
-                          <h3 className="font-serif text-xl">Questão {indice + 1}</h3>
-                          <button type="button" className="btn" onClick={() => setEditandoQuestao(questao.id)}>
+                      <QuestaoConferencia
+                        indice={indice + 1}
+                        enunciado={questao.enunciado}
+                        resposta={questao.resposta}
+                        extra={
+                          <button type="button" className="btn shrink-0" onClick={() => setEditandoQuestao(questao.id)}>
                             Editar
                           </button>
-                        </div>
-                        <p className="mt-2">{questao.enunciado}</p>
-                        <p className="mt-2 text-sm text-muted">{questao.resposta}</p>
-                      </>
+                        }
+                      />
                     )}
                   </li>
                 ))}
