@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { resumoDoCard } from "@/lib/cards";
 import { formatarData } from "@/lib/datas";
 import { montarDesempenho, porcentagem, type GrupoDesempenho, type GrupoMateria } from "@/lib/desempenho";
 import { mensagemErro } from "@/lib/erros";
@@ -120,25 +121,31 @@ export function Desempenho() {
       repo.materias.listar(),
       repo.pdfs.listarTodos(),
       repo.topicos.listarTodos(),
-      repo.questoes.listarTodas(),
+      repo.questoes.listarLeves(),
       repo.tentativas.listar({ desdeDias: JANELA_DIAS }),
       repo.lancamentos.listar(),
     ]);
-    return {
+    const resumo = montarDesempenho({
       materias,
+      pdfs: pdfs.map(({ id, nome, materiaId: dono }) => ({ id, nome, materiaId: dono })),
+      topicos,
+      questoes,
+      tentativas,
       lancamentos,
-      resumo: montarDesempenho({
-        materias,
-        pdfs: pdfs.map(({ id, nome, materiaId: dono }) => ({ id, nome, materiaId: dono })),
-        topicos,
-        questoes,
-        tentativas,
-        lancamentos,
-        caminhoMateria,
-        caminhoPdf,
-        caminhoTopico: (editalId: string) => `/editais/${editalId}`,
-      }),
-    };
+      caminhoMateria,
+      caminhoPdf,
+      caminhoTopico: (editalId: string) => `/editais/${editalId}`,
+    });
+    // A lista saiu sem os textos; busca só os dos poucos cards que aparecem nas listas.
+    const ids = [...new Set([...resumo.questoes, ...resumo.pontosCegos].map((item) => item.id))];
+    if (ids.length) {
+      const completos = new Map((await repo.questoes.obterVarias(ids)).map((card) => [card.id, card]));
+      for (const item of [...resumo.questoes, ...resumo.pontosCegos]) {
+        const card = completos.get(item.id);
+        if (card) item.enunciado = resumoDoCard(card.tipo, card.enunciado, 200);
+      }
+    }
+    return { materias, lancamentos, resumo };
   }, [], null);
 
   if (!pronto) return <Abrindo texto="Abrindo o desempenho…" />;

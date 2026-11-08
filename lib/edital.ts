@@ -59,3 +59,32 @@ export function diasAteProvaPorMateria(editais: Edital[], vinculos: EditalMateri
   }
   return resultado;
 }
+
+export type Ritmo = {
+  /** Tópicos ainda não marcados como estudados. */
+  pendentes: number;
+  /** Dias até a prova. */
+  dias: number;
+  /** Dias reservados para a revisão final, sem matéria nova. */
+  reserva: number;
+  /** Dias para estudar tópicos novos. */
+  diasDeEstudo: number;
+  /** Quantos tópicos por semana para terminar a tempo. */
+  porSemana: number;
+  /** O ritmo passa de um tópico por dia: dificilmente se cumpre. */
+  apertado: boolean;
+};
+
+/**
+ * Quanto falta e em que ritmo estudar para cobrir o edital antes da prova.
+ * Reserva os últimos dias (até 14, no máximo um quarto do tempo) para a revisão final.
+ */
+export function ritmoParaProva(topicos: Pick<EditalTopico, "feito">[], dataProva: number | null | undefined, agora = Date.now()): Ritmo | null {
+  const dias = diasAteProva(dataProva, agora);
+  if (dias === null || dias < 0) return null;
+  const pendentes = topicos.filter((topico) => !topico.feito).length;
+  const reserva = Math.min(14, Math.floor(dias / 4));
+  const diasDeEstudo = Math.max(1, dias - reserva);
+  const porSemana = pendentes / (diasDeEstudo / 7);
+  return { pendentes, dias, reserva, diasDeEstudo, porSemana, apertado: pendentes / diasDeEstudo > 1 };
+}

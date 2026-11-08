@@ -49,16 +49,18 @@ async function lerTabela(tabela: Tabela) {
 export async function gerarCopiaDaNuvem() {
   const tabelas: Record<string, Linha[]> = {};
   const contagem: Record<string, number> = {};
+  let total = 0;
   for (const tabela of TABELAS) {
     tabelas[tabela] = await lerTabela(tabela);
     contagem[tabela] = tabelas[tabela].length;
+    total += tabelas[tabela].length;
   }
   const conteudo = { app: "foco", origem: "nuvem", versao: 1, criadoEm: Date.now(), contagem, tabelas };
-  return new Blob([JSON.stringify(conteudo)], { type: "application/json" });
+  return { blob: new Blob([JSON.stringify(conteudo)], { type: "application/json" }), total, contagem };
 }
 
 export async function baixarCopiaDaNuvem() {
-  const blob = await gerarCopiaDaNuvem();
+  const { blob } = await gerarCopiaDaNuvem();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

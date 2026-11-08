@@ -301,6 +301,17 @@ const repoLocal = {
       const lista = await getDb().questoes.toArray();
       return lista.sort((a, b) => a.createdAt - b.createdAt);
     },
+    /** Mesma interface da nuvem: os cards sem o texto, para telas que só contam e agrupam. */
+    async listarLeves() {
+      const lista = await getDb().questoes.toArray();
+      return lista
+        .map((questao) => ({ ...questao, imagem: undefined, enunciado: "", resposta: "" }))
+        .sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async obterVarias(ids: string[]) {
+      const lista = await getDb().questoes.bulkGet(ids);
+      return lista.filter((questao): questao is Questao => Boolean(questao));
+    },
     async contarVencidas(agora = Date.now()): Promise<number> {
       return getDb()
         .questoes.filter((questao) => !questao.suspensa && (questao.proximaEm ?? 0) <= agora)
@@ -361,6 +372,37 @@ const repoLocal = {
       };
       await db.questoes.add(questao);
       return questao;
+    },
+    /** Cria muitos cards de uma vez (importação). Tudo ou nada. */
+    async criarVarios(entradas: { materiaId: string; tipo: TipoCard; enunciado: string; resposta: string }[]) {
+      const db = getDb();
+      const materias = new Set((await db.materias.toArray()).map((materia) => materia.id));
+      const agora = Date.now();
+      const cards: Questao[] = entradas.map((entrada, indice) => {
+        if (!materias.has(entrada.materiaId)) throw new ErroEstudo("Matéria não encontrada.");
+        const textos = prepararCard(entrada.tipo, entrada.enunciado, entrada.resposta);
+        return {
+          id: id(),
+          materiaId: entrada.materiaId,
+          pdfId: null,
+          pagina: null,
+          topicoId: null,
+          tipo: entrada.tipo,
+          ...textos,
+          suspensa: false,
+          julgadaEm: null,
+          errosSeguidos: 0,
+          erroComCerteza: false,
+          statusRevisao: "nova",
+          sequencia: 0,
+          facilidade: 2.5,
+          intervaloDias: 0,
+          proximaEm: agora,
+          createdAt: agora + indice,
+        };
+      });
+      await db.questoes.bulkAdd(cards);
+      return cards.length;
     },
     async atualizar(
       questaoId: string,

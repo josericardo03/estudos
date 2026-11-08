@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { pedirArmazenamentoPersistente, usoDoArmazenamento } from "@/lib/armazenamento";
+import { listarCopiasAutomaticas, lerCopiaAutomatica, type CopiaGuardada } from "@/lib/copiaAutomatica";
 import { useUltimaCopia } from "@/lib/copias";
 import { formatarData } from "@/lib/datas";
 import { mensagemErro } from "@/lib/erros";
 import { usePreferencia } from "@/lib/preferencias";
 import { supabase, supabaseConfigurado } from "@/lib/supabase";
 import { CHAVE_TEMA, TEMAS, type EscolhaDeTema } from "@/lib/tema";
+import { PlanilhaDeCards } from "./PlanilhaDeCards";
 import { Aviso } from "./ui";
 
 function megabytes(bytes: number) {
@@ -24,12 +26,18 @@ export function Dados() {
   const [persistente, setPersistente] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const ultimaCopia = useUltimaCopia();
+  const [copiasAuto, setCopiasAuto] = useState<CopiaGuardada[]>([]);
 
   useEffect(() => {
     let ativo = true;
     void usoDoArmazenamento().then((resultado) => {
       if (ativo) setUso(resultado);
     });
+    if (remoto) {
+      void listarCopiasAutomaticas().then((lista) => {
+        if (ativo) setCopiasAuto(lista);
+      });
+    }
     if (remoto) {
       void supabase()
         .auth.getUser()
@@ -101,6 +109,39 @@ export function Dados() {
       setAviso(
         `${total} itens restaurados. Os PDFs e os grifos não voltam com a cópia: reenvie os PDFs em Matérias.`,
       );
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível restaurar a cópia."));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function baixarCopiaAuto(dia: string) {
+    setErro(null);
+    setAviso(null);
+    const blob = await lerCopiaAutomatica(dia);
+    if (!blob) {
+      setErro("Esta cópia não está mais neste aparelho.");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `foco-nuvem-${dia}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  async function restaurarCopiaAuto(dia: string) {
+    setOcupado(true);
+    setErro(null);
+    setAviso(null);
+    try {
+      const blob = await lerCopiaAutomatica(dia);
+      if (!blob) throw new Error("Esta cópia não está mais neste aparelho.");
+      const { restaurarCopiaDaNuvem } = await import("@/lib/nuvem");
+      const total = await restaurarCopiaDaNuvem(new File([blob], `foco-nuvem-${dia}.json`));
+      setAviso(`${total} itens restaurados da cópia de ${dia}. Os PDFs e os grifos não voltam com a cópia.`);
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível restaurar a cópia."));
     } finally {
@@ -199,6 +240,34 @@ export function Dados() {
               />
             </label>
           </div>
+
+          <h3 className="mt-8 font-serif text-2xl">Cópias automáticas neste aparelho</h3>
+          <p className="mt-2 text-muted">
+            Uma vez por semana, com o app aberto e a sessão ativa, o Foco guarda aqui uma cópia dos seus dados (as duas
+            mais recentes). É uma rede de segurança extra, não substitui o arquivo guardado fora do aparelho.
+          </p>
+          {copiasAuto.length === 0 ? (
+            <p className="mt-2 text-sm text-muted">Ainda não há nenhuma. A primeira sai poucos segundos depois de você abrir o app.</p>
+          ) : (
+            <ul className="mt-3 grid gap-2">
+              {copiasAuto.map((copia) => (
+                <li key={copia.dia} className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    {formatarData(new Date(`${copia.dia}T12:00:00`).getTime())}
+                    {copia.tamanho ? <span className="text-sm text-muted"> · {megabytes(copia.tamanho)}</span> : null}
+                  </span>
+                  <span className="flex gap-2">
+                    <button type="button" className="btn" disabled={ocupado} onClick={() => void baixarCopiaAuto(copia.dia)}>
+                      Baixar
+                    </button>
+                    <button type="button" className="btn" disabled={ocupado} onClick={() => void restaurarCopiaAuto(copia.dia)}>
+                      Restaurar
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       ) : (
         <section className="mt-10" aria-labelledby="titulo-backup">
@@ -235,6 +304,8 @@ export function Dados() {
           </div>
         </section>
       )}
+
+      <PlanilhaDeCards />
 
       {uso ? (
         <section className="mt-10" aria-labelledby="titulo-espaco">

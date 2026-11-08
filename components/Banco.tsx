@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { combinaComBusca, normalizar, palavrasDaBusca } from "@/lib/busca";
 import { ocultarLacunas, resumoDoCard, textoRevelado } from "@/lib/cards";
 import { carregarCartoes, type Cartao } from "@/lib/cartoes";
 import { formatarData } from "@/lib/datas";
@@ -135,6 +136,8 @@ function AvisoGargalo() {
 function Lista({ materiaId }: { materiaId: string }) {
   const [somenteVencidas, setSomenteVencidas] = useState(false);
   const [mostrados, setMostrados] = useState(POR_PAGINA);
+  const [busca, setBusca] = useState("");
+  const buscaAdiada = useDeferredValue(busca);
   const { dados, pronto, erro } = useConsulta(
     async () => {
       const cartoes = await carregarCartoes(materiaId ? { materiaIds: [materiaId] } : {});
@@ -142,6 +145,17 @@ function Lista({ materiaId }: { materiaId: string }) {
     },
     [materiaId],
     null,
+  );
+  // O texto de cada card é normalizado uma vez; digitar só compara.
+  const textos = useMemo(
+    () =>
+      new Map(
+        (dados?.cartoes ?? []).map((cartao) => [
+          cartao.id,
+          normalizar(`${cartao.enunciado} ${cartao.resposta} ${origemDoCard(cartao)}`),
+        ]),
+      ),
+    [dados],
   );
 
   if (!pronto) return <Abrindo texto="Abrindo as questões…" />;
@@ -154,13 +168,29 @@ function Lista({ materiaId }: { materiaId: string }) {
     );
   }
 
+  const palavras = palavrasDaBusca(buscaAdiada);
   const ordenadas = dados.cartoes
     .filter((cartao) => !somenteVencidas || estaDevida(cartao, dados.agora))
+    .filter((cartao) => combinaComBusca(textos.get(cartao.id) ?? "", palavras))
     .sort((a, b) => (a.proximaEm ?? 0) - (b.proximaEm ?? 0) || a.createdAt - b.createdAt);
 
   return (
     <div className="mt-6">
-      <label className="flex items-center gap-3 text-sm">
+      <label className="rotulo" htmlFor="busca-cards">
+        Buscar nos cards
+      </label>
+      <input
+        id="busca-cards"
+        className="campo"
+        type="search"
+        placeholder="Frente, verso, matéria, PDF ou tópico"
+        value={busca}
+        onChange={(evento) => {
+          setBusca(evento.target.value);
+          setMostrados(POR_PAGINA);
+        }}
+      />
+      <label className="mt-4 flex items-center gap-3 text-sm">
         <input
           type="checkbox"
           checked={somenteVencidas}
@@ -175,6 +205,7 @@ function Lista({ materiaId }: { materiaId: string }) {
         {Math.min(mostrados, ordenadas.length)} de {ordenadas.length}{" "}
         {ordenadas.length === 1 ? "card" : "cards"}, do mais atrasado para o mais distante.
       </p>
+      {ordenadas.length === 0 ? <p className="mt-4 text-muted">Nenhum card combina com a busca.</p> : null}
       <ul className="mt-4 flex flex-col gap-3">
         {ordenadas.slice(0, mostrados).map((cartao) => {
           const vencida = estaDevida(cartao, dados.agora);

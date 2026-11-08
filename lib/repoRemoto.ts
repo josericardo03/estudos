@@ -506,6 +506,9 @@ async function caminhosDeImagensDeCards(materiaId: string) {
   return linhas.map((linha) => linha.imagem_path).filter((caminho): caminho is string => Boolean(caminho));
 }
 
+const COLUNAS_LEVES =
+  "id, materia_id, pdf_id, pagina, topico_id, tipo, imagem_path, suspensa, julgada_em, erros_seguidos, erro_com_certeza, status_revisao, sequencia, facilidade, intervalo_dias, proxima_em, created_at";
+
 function ordenarCards(lista: Questao[]) {
   return lista.sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -867,6 +870,30 @@ export const repoRemoto = {
       );
       return ordenarCards(linhas.map((linha) => questaoDe(linha)));
     },
+    /**
+     * Todos os cards sem o texto (enunciado e verso): para telas que só contam e agrupam.
+     * Com milhares de cards, deixa a leitura bem menor.
+     */
+    async listarLeves() {
+      const linhas = await paginar<LinhaQuestao>(
+        (de, ate) => supabase().from("questoes").select(COLUNAS_LEVES).order("id").range(de, ate),
+        "Não foi possível ler os cards.",
+      );
+      return ordenarCards(linhas.map((linha) => questaoDe({ ...linha, enunciado: "", resposta: "" })));
+    },
+    /** Os cards com esses ids, com o texto. */
+    async obterVarias(ids: string[]) {
+      const resultado: Questao[] = [];
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data, error } = await supabase()
+          .from("questoes")
+          .select("*")
+          .in("id", ids.slice(i, i + 100));
+        checar(error, "Não foi possível ler os cards.");
+        resultado.push(...((data ?? []) as LinhaQuestao[]).map((linha) => questaoDe(linha)));
+      }
+      return resultado;
+    },
     /** Só o que venceu, já com as figuras: é o que a revisão do dia usa. */
     async listarVencidas(agora = Date.now()) {
       const linhas = await paginar<LinhaQuestao>(
@@ -991,6 +1018,40 @@ export const repoRemoto = {
       }
       avisarMudanca();
       return questao;
+    },
+    /** Cria muitos cards de uma vez (importação), em lotes. */
+    async criarVarios(entradas: { materiaId: string; tipo: TipoCard; enunciado: string; resposta: string }[]) {
+      const agora = Date.now();
+      const linhas = entradas.map((entrada, indice) => {
+        const textos = prepararCard(entrada.tipo, entrada.enunciado, entrada.resposta);
+        return {
+          id: novoId(),
+          materia_id: entrada.materiaId,
+          pdf_id: null,
+          pagina: null,
+          topico_id: null,
+          tipo: entrada.tipo,
+          enunciado: textos.enunciado,
+          resposta: textos.resposta,
+          imagem_path: null,
+          suspensa: false,
+          julgada_em: null,
+          erros_seguidos: 0,
+          erro_com_certeza: false,
+          status_revisao: "nova",
+          sequencia: 0,
+          facilidade: 2.5,
+          intervalo_dias: 0,
+          proxima_em: iso(agora),
+          created_at: iso(agora + indice),
+        };
+      });
+      for (let i = 0; i < linhas.length; i += 200) {
+        const { error } = await supabase().from("questoes").insert(linhas.slice(i, i + 200));
+        checar(error, `A importação parou no card ${i + 1}. Os anteriores já foram guardados.`);
+      }
+      avisarMudanca();
+      return linhas.length;
     },
     async atualizar(
       questaoId: string,

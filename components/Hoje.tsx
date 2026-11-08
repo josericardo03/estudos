@@ -6,8 +6,8 @@ import { juntarCartoes } from "@/lib/cartoes";
 import { formatarData, formatarDuracao } from "@/lib/datas";
 import { desempenhoDasMaterias } from "@/lib/desempenho";
 import { DIAS_PARA_LEMBRAR, useUltimaCopia } from "@/lib/copias";
-import { descreverProva, diasAteProva, diasAteProvaPorMateria } from "@/lib/edital";
-import { resumirEstudo } from "@/lib/estudo";
+import { descreverProva, diasAteProva, diasAteProvaPorMateria, ritmoParaProva } from "@/lib/edital";
+import { resumirEstudo, revisoesPorDia } from "@/lib/estudo";
 import { montarPlano, planoManual, type ItemPlano } from "@/lib/plano";
 import { gravarBruto, usePreferencia, useBruto } from "@/lib/preferencias";
 import { repo } from "@/lib/repo";
@@ -88,8 +88,16 @@ export function Hoje() {
       tentativas,
       desempenho,
       provas,
+      ritmos: provas.slice(0, 3).flatMap((edital) => {
+        const ritmo = ritmoParaProva(
+          topicos.filter((topico) => topico.editalId === edital.id),
+          edital.dataProva,
+          agora,
+        );
+        return ritmo && ritmo.pendentes > 0 ? [{ edital, ritmo }] : [];
+      }),
       diasProva: diasAteProvaPorMateria(editais, vinculos, agora),
-      estudo: resumirEstudo(estudos, agora),
+      estudo: resumirEstudo(estudos, agora, 28, revisoesPorDia(tentativas)),
     };
   }, [], null, { pausado: sessao !== null });
 
@@ -145,6 +153,21 @@ export function Hoje() {
         </ul>
       ) : null}
 
+      {dados.ritmos.length > 0 ? (
+        <ul className="mt-3 grid gap-1 text-sm text-muted" aria-label="Ritmo para as provas">
+          {dados.ritmos.map(({ edital, ritmo }) => (
+            <li key={edital.id}>
+              <span className="text-ink">{edital.nome}:</span> {ritmo.pendentes}{" "}
+              {ritmo.pendentes === 1 ? "tópico pendente" : "tópicos pendentes"}.{" "}
+              {ritmo.apertado
+                ? "O prazo está apertado: dá mais de um tópico por dia. Priorize os de maior peso."
+                : `Para cobrir tudo, cerca de ${ritmo.porSemana.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} por semana`}
+              {!ritmo.apertado && ritmo.reserva > 0 ? `, deixando os últimos ${ritmo.reserva} dias para a revisão final.` : !ritmo.apertado ? "." : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {sessao ? (
         <SessaoRevisao
           inicial={sessao}
@@ -178,6 +201,7 @@ export function Hoje() {
                 {dados.estudo.sequencia}
                 <span className="text-2xl text-muted"> {dados.estudo.sequencia === 1 ? "dia" : "dias"}</span>
               </p>
+              <p className="mt-1 text-xs text-muted">10 min ou 10 revisões por dia</p>
             </article>
           </div>
 
