@@ -65,6 +65,8 @@ export type Tentativa = {
   pagina: number | null;
   acertou: boolean;
   em: number;
+  /** Foi a primeira vez que o card foi julgado. Dispensa reler o histórico para contar os novos do dia. */
+  nova?: boolean;
   nota?: Nota;
   confianca?: Confianca;
   motivo?: MotivoErro;
@@ -88,6 +90,14 @@ export type Questao = {
   imagem?: Blob;
   /** Cards suspensos não entram em nenhuma fila. */
   suspensa?: boolean;
+  /**
+   * Estado derivado, guardado no card para a fila e os avisos não dependerem de reler todo o
+   * histórico de tentativas (que cresce sem parar).
+   */
+  julgadaEm?: number | null;
+  errosSeguidos?: number;
+  /** O último julgamento foi um erro com "tenho certeza". */
+  erroComCerteza?: boolean;
   statusRevisao: StatusRevisao;
   /** Acertos seguidos. Erro zera. */
   sequencia?: number;

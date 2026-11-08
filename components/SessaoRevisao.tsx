@@ -6,9 +6,9 @@ import { partesDaLacuna } from "@/lib/cards";
 import type { Cartao } from "@/lib/cartoes";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { calcularAgenda, gargalos, limiteDaProva, previsaoDasNotas, type Agenda } from "@/lib/revisao";
+import { calcularAgenda, ehGargalo, limiteDaProva, previsaoDasNotas, type Agenda } from "@/lib/revisao";
 import { caminhoPdf } from "@/lib/rotas";
-import type { Confianca, MotivoErro, Nota, Tentativa } from "@/lib/types";
+import type { Confianca, MotivoErro, Nota } from "@/lib/types";
 import { CONFIANCAS, MOTIVOS_ERRO, NOTAS } from "@/lib/types";
 import { Aviso, Confirmar, RecorteGrifo } from "./ui";
 
@@ -37,6 +37,9 @@ function agendaAtual(cartao: Cartao): Agenda {
     intervaloDias: cartao.intervaloDias ?? 0,
     proximaEm: cartao.proximaEm ?? 0,
     statusRevisao: cartao.statusRevisao,
+    errosSeguidos: cartao.errosSeguidos ?? 0,
+    erroComCerteza: Boolean(cartao.erroComCerteza),
+    julgadaEm: cartao.julgadaEm ?? null,
   };
 }
 
@@ -73,13 +76,11 @@ function FrenteDoCard({ cartao, revelado }: { cartao: Cartao; revelado: boolean 
 export function SessaoRevisao({
   inicial,
   cartoes,
-  tentativas,
   diasProva,
   onFechar,
 }: {
   inicial: string[];
   cartoes: Cartao[];
-  tentativas: Tentativa[];
   diasProva: Map<string, number>;
   onFechar: () => void;
 }) {
@@ -101,7 +102,6 @@ export function SessaoRevisao({
   const reenfileiradas = useRef(new Set<string>());
 
   const porId = useMemo(() => new Map(cartoes.map((cartao) => [cartao.id, cartao])), [cartoes]);
-  const emGargalo = useMemo(() => gargalos(tentativas), [tentativas]);
 
   const atualId = fila[indice];
   const base = atualId ? porId.get(atualId) : undefined;
@@ -124,7 +124,10 @@ export function SessaoRevisao({
     setErro(null);
     try {
       const anterior = agendaAtual(atual);
-      const agenda = calcularAgenda(atual, nota, { limiteDias: limiteDaProva(diasProva.get(atual.materiaId)) });
+      const agenda = calcularAgenda(atual, nota, {
+        limiteDias: limiteDaProva(diasProva.get(atual.materiaId)),
+        confianca,
+      });
       const tentativaId = crypto.randomUUID();
       await repo.questoes.registrarJulgamento(atual.id, agenda, {
         id: tentativaId,
@@ -133,6 +136,7 @@ export function SessaoRevisao({
         topicoId: atual.topicoId,
         pagina: atual.pagina,
         acertou: nota >= 2,
+        nova: atual.julgadaEm == null,
         nota,
         ...(confianca ? { confianca } : {}),
         ...(motivo ? { motivo } : {}),
@@ -406,7 +410,7 @@ export function SessaoRevisao({
                 <RecorteGrifo imagem={atual.imagem} texto="Figura do card" />
               </div>
             ) : null}
-            {emGargalo.has(atual.id) ? (
+            {ehGargalo(atual) ? (
               <p className="mt-3 text-sm text-alta">
                 <span className="selo selo-alta mr-2">Gargalo</span>
                 Três erros seguidos. Releia a teoria deste trecho antes de insistir no card.{" "}

@@ -1,7 +1,6 @@
 import type { GrupoMateria } from "./desempenho";
 import { porcentagem } from "./desempenho";
-import { estaDevida } from "./revisao";
-import type { EditalTopico, Materia, Questao } from "./types";
+import type { EditalTopico, Materia } from "./types";
 
 export type ItemPlano = {
   materiaId: string;
@@ -20,27 +19,27 @@ const MINIMO = 10;
  */
 export function montarPlano(entrada: {
   materias: Materia[];
-  questoes: Questao[];
+  /** Quantos cards cada matéria tem, e quantos deles venceram. Dispensa carregar os cards. */
+  cardsPorMateria: Record<string, number>;
+  vencidasPorMateria: Record<string, number>;
   topicos: EditalTopico[];
   desempenho: GrupoMateria[];
   minutosDia: number;
-  agora?: number;
 }): ItemPlano[] {
-  const agora = entrada.agora ?? Date.now();
   const forcaDe = new Map(entrada.desempenho.map((grupo) => [grupo.id, grupo]));
 
   const candidatos = entrada.materias
     .map((materia) => {
       const topicos = entrada.topicos.filter((topico) => topico.materiaId === materia.id);
-      const questoes = entrada.questoes.filter((questao) => questao.materiaId === materia.id);
-      if (!topicos.length && !questoes.length) return null;
+      const totalDeCards = entrada.cardsPorMateria[materia.id] ?? 0;
+      if (!topicos.length && !totalDeCards) return null;
 
       const pesoMedio = topicos.length ? topicos.reduce((total, topico) => total + topico.peso, 0) / topicos.length : 3;
       const pendentes = topicos.filter((topico) => !topico.feito).length;
       const pendencia = topicos.length ? pendentes / topicos.length : 1;
       const desempenho = forcaDe.get(materia.id);
       const forca = desempenho?.forca ?? 0.6;
-      const vencidas = questoes.filter((questao) => estaDevida(questao, agora)).length;
+      const vencidas = entrada.vencidasPorMateria[materia.id] ?? 0;
 
       const score =
         (pesoMedio / 3) * (0.4 + 0.6 * pendencia) * (1 + 2 * (1 - forca)) * (1 + Math.min(vencidas, 30) / 30);

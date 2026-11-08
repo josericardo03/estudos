@@ -4,26 +4,27 @@ import Link from "next/link";
 import { useState } from "react";
 import { juntarCartoes } from "@/lib/cartoes";
 import { formatarData, formatarDuracao } from "@/lib/datas";
-import { montarDesempenho } from "@/lib/desempenho";
+import { desempenhoDasMaterias } from "@/lib/desempenho";
+import { DIAS_PARA_LEMBRAR, useUltimaCopia } from "@/lib/copias";
 import { descreverProva, diasAteProva, diasAteProvaPorMateria } from "@/lib/edital";
 import { resumirEstudo } from "@/lib/estudo";
 import { montarPlano, planoManual, type ItemPlano } from "@/lib/plano";
 import { gravarBruto, usePreferencia, useBruto } from "@/lib/preferencias";
 import { repo } from "@/lib/repo";
 import {
-  estaDevida,
   filaDeHoje,
   LIMITE_NOVOS_PADRAO,
   LIMITE_REVISOES_PADRAO,
-  proximaData,
 } from "@/lib/revisao";
-import { caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import { caminhoMateria } from "@/lib/rotas";
 import type { Materia } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
 import { SessaoRevisao } from "./SessaoRevisao";
 
 const ADIANTADO = 15;
+/** A tela Hoje só olha o histórico recente: o resto não muda o plano nem o desempenho por matéria. */
+const JANELA_DIAS = 180;
 const CHAVE_PLANO_MANUAL = "foco.planoManual";
 
 function lerPlanoManual(bruto: string | null): Record<string, number> {
@@ -48,14 +49,19 @@ export function Hoje() {
   const [limiteRevisoes, definirLimiteRevisoes] = usePreferencia<number>("foco.limiteRevisoes", LIMITE_REVISOES_PADRAO);
   const [modoPlano, definirModoPlano] = usePreferencia<"auto" | "manual">("foco.planoModo", "auto");
   const planoManualBruto = useBruto(CHAVE_PLANO_MANUAL);
+  const ultimaCopia = useUltimaCopia();
 
   const { dados, pronto, erro } = useConsulta(async () => {
-    const [materias, pdfs, questoes, tentativas, editais, vinculos, topicos, estudos, lancamentos] =
+    // Só o que a tela precisa: os cards vencidos e os próximos, contagens por matéria e o histórico recente.
+    // Ler o banco inteiro a cada visita ficaria lento (e, no Supabase, cortado em 1000 linhas).
+    const [materias, pdfs, vencidas, proximas, porMateria, tentativas, editais, vinculos, topicos, estudos, lancamentos] =
       await Promise.all([
         repo.materias.listar(),
         repo.pdfs.listarTodos(),
-        repo.questoes.listarTodas(),
-        repo.tentativas.listar(),
+        repo.questoes.listarVencidas(),
+        repo.questoes.listarProximas(ADIANTADO),
+        repo.questoes.contarPorMateria(),
+        repo.tentativas.listar({ desdeDias: JANELA_DIAS }),
         repo.editais.listar(),
         repo.editais.vinculos(),
         repo.topicos.listarTodos(),
@@ -63,28 +69,22 @@ export function Hoje() {
         repo.lancamentos.listar(),
       ]);
     const agora = Date.now();
-    const cartoes = juntarCartoes(questoes, materias, pdfs, topicos);
-    const desempenho = montarDesempenho({
-      materias,
-      pdfs,
-      topicos,
-      questoes,
-      tentativas,
-      lancamentos,
-      agora,
-      caminhoMateria,
-      caminhoPdf,
-      caminhoTopico: (editalId) => `/editais/${editalId}`,
-    });
+    const cartoesVencidos = juntarCartoes(vencidas, materias, pdfs, topicos);
+    const cartoesProximos = juntarCartoes(proximas, materias, pdfs, topicos);
+    const vencidasPorMateria: Record<string, number> = {};
+    for (const cartao of vencidas) vencidasPorMateria[cartao.materiaId] = (vencidasPorMateria[cartao.materiaId] ?? 0) + 1;
+    const desempenho = desempenhoDasMaterias({ materias, tentativas, lancamentos, agora, caminhoMateria });
     const provas = editais
       .filter((edital) => edital.dataProva && (diasAteProva(edital.dataProva, agora) ?? -1) >= 0)
       .sort((a, b) => (a.dataProva ?? 0) - (b.dataProva ?? 0));
     return {
       agora,
       materias,
-      questoes,
       topicos,
-      cartoes,
+      cartoesVencidos,
+      cartoesProximos,
+      cardsPorMateria: porMateria,
+      vencidasPorMateria,
       tentativas,
       desempenho,
       provas,
@@ -97,27 +97,31 @@ export function Hoje() {
   if (erro) return <div className="px-5 py-10"><Aviso texto={erro} /></div>;
   if (!dados) return null;
 
-  const filtrados = dados.cartoes.filter((cartao) => !materiaFiltro || cartao.materiaId === materiaFiltro);
-  const dia = filaDeHoje(filtrados, dados.tentativas, { agora: dados.agora, limiteNovos, limiteRevisoes });
-  const totalVencidas = dados.cartoes.filter((cartao) => estaDevida(cartao, dados.agora)).length;
-  const proxima = proximaData(filtrados, dados.agora);
-  const adiantadas = filtrados
-    .filter((cartao) => !estaDevida(cartao, dados.agora) && !cartao.suspensa)
-    .sort((a, b) => (a.proximaEm ?? 0) - (b.proximaEm ?? 0))
-    .slice(0, ADIANTADO);
+  const dosFiltros = (cartao: { materiaId: string }) => !materiaFiltro || cartao.materiaId === materiaFiltro;
+  const vencidosFiltrados = dados.cartoesVencidos.filter(dosFiltros);
+  const adiantadas = dados.cartoesProximos.filter(dosFiltros);
+  const dia = filaDeHoje(vencidosFiltrados, dados.tentativas, { agora: dados.agora, limiteNovos, limiteRevisoes });
+  const totalVencidas = dados.cartoesVencidos.length;
+  const proxima = adiantadas[0]?.proximaEm ?? null;
+  const totalDeCards = materiaFiltro
+    ? (dados.cardsPorMateria[materiaFiltro] ?? 0)
+    : Object.values(dados.cardsPorMateria).reduce((soma, quantos) => soma + quantos, 0);
+  const cartoesDaSessao = [...dados.cartoesVencidos, ...dados.cartoesProximos];
   const planoAutomatico = montarPlano({
     materias: dados.materias,
-    questoes: dados.questoes,
+    cardsPorMateria: dados.cardsPorMateria,
+    vencidasPorMateria: dados.vencidasPorMateria,
     topicos: dados.topicos,
-    desempenho: dados.desempenho.materias,
+    desempenho: dados.desempenho,
     minutosDia: metaMinutos,
-    agora: dados.agora,
   });
   const minutosManuais = lerPlanoManual(planoManualBruto);
   const plano = modoPlano === "manual" ? planoManual(dados.materias, minutosManuais) : planoAutomatico;
   const hojeSegundos = dados.estudo.hoje;
   const metaSegundos = metaMinutos * 60;
   const ficaram = dia.ficaramNovas + dia.ficaramRevisoes;
+  const diasSemCopia = ultimaCopia ? Math.floor((dados.agora - ultimaCopia) / 86_400_000) : null;
+  const lembrarDaCopia = totalDeCards >= 20 && (diasSemCopia === null || diasSemCopia >= DIAS_PARA_LEMBRAR);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-10">
@@ -144,8 +148,7 @@ export function Hoje() {
       {sessao ? (
         <SessaoRevisao
           inicial={sessao}
-          cartoes={dados.cartoes}
-          tentativas={dados.tentativas}
+          cartoes={cartoesDaSessao}
           diasProva={dados.diasProva}
           onFechar={() => setSessao(null)}
         />
@@ -177,6 +180,17 @@ export function Hoje() {
               </p>
             </article>
           </div>
+
+          {lembrarDaCopia ? (
+            <p className="mt-6 rounded-xl bg-[var(--campo-bg)] px-4 py-3 text-sm">
+              {diasSemCopia === null
+                ? "Você ainda não exportou uma cópia dos seus dados."
+                : `Faz ${diasSemCopia} dias que você não exporta uma cópia dos seus dados.`}{" "}
+              <Link href="/dados" className="text-pine underline">
+                Fazer agora
+              </Link>
+            </p>
+          ) : null}
 
           {dados.materias.length === 0 ? (
             <p className="mt-10 text-muted">
@@ -232,7 +246,7 @@ export function Hoje() {
             ) : (
               <>
                 <p className="mt-3 text-muted">
-                  {filtrados.length === 0
+                  {totalDeCards === 0
                     ? "Nenhum card aqui ainda. Selecione um trecho no leitor e crie o primeiro."
                     : ficaram > 0
                       ? "Você já bateu o limite de hoje. Aumente o limite abaixo se quiser continuar."

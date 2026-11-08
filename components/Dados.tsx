@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { pedirArmazenamentoPersistente, usoDoArmazenamento } from "@/lib/armazenamento";
+import { useUltimaCopia } from "@/lib/copias";
+import { formatarData } from "@/lib/datas";
 import { mensagemErro } from "@/lib/erros";
 import { usePreferencia } from "@/lib/preferencias";
 import { supabase, supabaseConfigurado } from "@/lib/supabase";
@@ -21,6 +23,7 @@ export function Dados() {
   const [uso, setUso] = useState<{ usado: number; cota: number } | null>(null);
   const [persistente, setPersistente] = useState<boolean | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+  const ultimaCopia = useUltimaCopia();
 
   useEffect(() => {
     let ativo = true;
@@ -68,6 +71,38 @@ export function Dados() {
       setAviso(`${total} itens restaurados. Os que já existiam foram sobrescritos pelo backup.`);
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível restaurar o backup."));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function exportarNuvem() {
+    setOcupado(true);
+    setErro(null);
+    setAviso(null);
+    try {
+      const { baixarCopiaDaNuvem } = await import("@/lib/nuvem");
+      const tamanho = await baixarCopiaDaNuvem();
+      setAviso(`Cópia gerada (${megabytes(tamanho)}). Guarde o arquivo fora deste aparelho, num lugar seguro.`);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível gerar a cópia."));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function restaurarNuvem(arquivo: File) {
+    setOcupado(true);
+    setErro(null);
+    setAviso(null);
+    try {
+      const { restaurarCopiaDaNuvem } = await import("@/lib/nuvem");
+      const total = await restaurarCopiaDaNuvem(arquivo);
+      setAviso(
+        `${total} itens restaurados. Os PDFs e os grifos não voltam com a cópia: reenvie os PDFs em Matérias.`,
+      );
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível restaurar a cópia."));
     } finally {
       setOcupado(false);
     }
@@ -133,6 +168,36 @@ export function Dados() {
             <button type="button" className="btn" onClick={() => void limparCacheDePdfs()}>
               Limpar PDFs guardados offline
             </button>
+          </div>
+
+          <h3 className="mt-8 font-serif text-2xl">Cópia de segurança</h3>
+          <p className="mt-2 text-muted">
+            O plano gratuito do Supabase não faz backup automático. Exporte de vez em quando: a cópia leva os cards, o
+            histórico de revisões, os editais e o tempo de estudo. Os arquivos dos PDFs continuam no Supabase.
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            {ultimaCopia
+              ? `Última cópia: ${formatarData(ultimaCopia)}.`
+              : "Você ainda não fez nenhuma cópia neste aparelho."}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button type="button" className="btn btn-primario" disabled={ocupado} onClick={() => void exportarNuvem()}>
+              {ocupado ? "Trabalhando…" : "Exportar dados da nuvem"}
+            </button>
+            <label className={`btn ${ocupado ? "opacity-60" : ""}`}>
+              Restaurar cópia
+              <input
+                className="sr-only"
+                type="file"
+                accept="application/json,.json"
+                disabled={ocupado}
+                onChange={(evento) => {
+                  const arquivo = evento.target.files?.[0];
+                  evento.target.value = "";
+                  if (arquivo) void restaurarNuvem(arquivo);
+                }}
+              />
+            </label>
           </div>
         </section>
       ) : (

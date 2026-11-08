@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ocultarLacunas, resumoDoCard, textoRevelado } from "@/lib/cards";
 import { carregarCartoes, type Cartao } from "@/lib/cartoes";
 import { formatarData } from "@/lib/datas";
@@ -13,8 +13,8 @@ import { repo } from "@/lib/repo";
 import {
   calcularAgenda,
   descreverVolta,
+  ehGargalo,
   estaDevida,
-  gargalos,
   limitarSimulado,
   limiteDaProva,
   notaDeAcerto,
@@ -22,18 +22,15 @@ import {
   separarSimulado,
 } from "@/lib/revisao";
 import { caminhoPdf } from "@/lib/rotas";
-import type { Confianca, Materia, MotivoErro, Tentativa } from "@/lib/types";
+import type { Confianca, Materia, MotivoErro } from "@/lib/types";
 import { CONFIANCAS, MOTIVOS_ERRO, STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar } from "./ui";
 
 const CHAVE_SIMULADO = "foco.simulado";
+/** A lista mostra aos poucos: com milhares de cards, desenhar todos de uma vez trava a tela. */
+const POR_PAGINA = 50;
 const VALIDADE_SIMULADO = 3 * 86_400_000;
-
-/** Relógio lido só em respostas a cliques, nunca durante a renderização. */
-function instante() {
-  return Date.now();
-}
 
 function embaralhar<T>(lista: T[]) {
   const copia = lista.slice();
@@ -137,15 +134,11 @@ function AvisoGargalo() {
 
 function Lista({ materiaId }: { materiaId: string }) {
   const [somenteVencidas, setSomenteVencidas] = useState(false);
+  const [mostrados, setMostrados] = useState(POR_PAGINA);
   const { dados, pronto, erro } = useConsulta(
     async () => {
-      const [cartoes, tentativas] = await Promise.all([
-        carregarCartoes(materiaId ? { materiaIds: [materiaId] } : {}),
-        repo.tentativas.listar(),
-      ]);
-      const contagem = new Map<string, number>();
-      for (const item of tentativas) contagem.set(item.questaoId, (contagem.get(item.questaoId) ?? 0) + 1);
-      return { cartoes, contagem, agora: Date.now() };
+      const cartoes = await carregarCartoes(materiaId ? { materiaIds: [materiaId] } : {});
+      return { cartoes, agora: Date.now() };
     },
     [materiaId],
     null,
@@ -168,15 +161,22 @@ function Lista({ materiaId }: { materiaId: string }) {
   return (
     <div className="mt-6">
       <label className="flex items-center gap-3 text-sm">
-        <input type="checkbox" checked={somenteVencidas} onChange={(evento) => setSomenteVencidas(evento.target.checked)} />
+        <input
+          type="checkbox"
+          checked={somenteVencidas}
+          onChange={(evento) => {
+            setSomenteVencidas(evento.target.checked);
+            setMostrados(POR_PAGINA);
+          }}
+        />
         Só as vencidas
       </label>
       <p className="mt-3 text-sm text-muted">
-        {ordenadas.length} de {dados.cartoes.length} {dados.cartoes.length === 1 ? "card" : "cards"}, do mais atrasado
-        para o mais distante.
+        {Math.min(mostrados, ordenadas.length)} de {ordenadas.length}{" "}
+        {ordenadas.length === 1 ? "card" : "cards"}, do mais atrasado para o mais distante.
       </p>
       <ul className="mt-4 flex flex-col gap-3">
-        {ordenadas.map((cartao) => {
+        {ordenadas.slice(0, mostrados).map((cartao) => {
           const vencida = estaDevida(cartao, dados.agora);
           const origem = origemDoCard(cartao);
           const status = STATUS_REVISAO.find((item) => item.id === cartao.statusRevisao)?.nome;
@@ -196,7 +196,7 @@ function Lista({ materiaId }: { materiaId: string }) {
                 {resumoDoCard(cartao.tipo, cartao.enunciado, 220) || "(card só com imagem)"}
               </p>
               <p className="mt-2 text-sm text-muted">
-                {status} · {dados.contagem.get(cartao.id) ?? 0} {dados.contagem.get(cartao.id) === 1 ? "tentativa" : "tentativas"}
+                {status} · {cartao.julgadaEm != null ? "já revisado" : "nunca revisado"}
                 {cartao.intervaloDias ? ` · intervalo de ${cartao.intervaloDias} dias` : ""}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -221,11 +221,16 @@ function Lista({ materiaId }: { materiaId: string }) {
           );
         })}
       </ul>
+      {ordenadas.length > mostrados ? (
+        <button type="button" className="btn mt-4" onClick={() => setMostrados((atual) => atual + 100)}>
+          Mostrar mais ({ordenadas.length - mostrados} restantes)
+        </button>
+      ) : null}
     </div>
   );
 }
 
-type Julgamento = { acertou: boolean; texto: string; motivo?: MotivoErro };
+type Julgamento = { acertou: boolean; texto: string; erros: number; motivo?: MotivoErro };
 
 type SimuladoSalvo = {
   salvoEm: number;
@@ -264,7 +269,6 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [sobraram, setSobraram] = useState(0);
   const [pedido, setPedido] = useState<number | null>(null);
   const [julgamentos, setJulgamentos] = useState<Record<string, Julgamento>>({});
-  const [historico, setHistorico] = useState<Tentativa[]>([]);
   const tentativasDaProva = useRef<Record<string, string>>({});
   const salvoBruto = useBruto(CHAVE_SIMULADO);
   const [aberturaEm] = useState(() => Date.now());
@@ -279,7 +283,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     [],
     new Map<string, number>(),
   );
-  const emGargalo = useMemo(() => gargalos(historico), [historico]);
+  const emGargalo = (questao: Cartao) => (julgamentos[questao.id]?.erros ?? questao.errosSeguidos ?? 0) >= 3 || ehGargalo(questao);
 
   // Gravar a cada tecla seria trabalho à toa: espera uma pausa na digitação.
   useEffect(() => {
@@ -313,7 +317,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     setErro(null);
     setGerando(true);
     try {
-      const [cartoes, tentativas] = await Promise.all([carregarCartoes(), repo.tentativas.listar()]);
+      const cartoes = await carregarCartoes();
       const porId = new Map(cartoes.map((cartao) => [cartao.id, cartao]));
       const questoes = salvo.ids.flatMap((id) => {
         const cartao = porId.get(id);
@@ -325,7 +329,6 @@ function Simulado({ materias }: { materias: Materia[] }) {
         return;
       }
       tentativasDaProva.current = salvo.tentativas ?? {};
-      setHistorico(tentativas);
       setDeFora(0);
       setSobraram(0);
       setPedido(null);
@@ -355,7 +358,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     }
     setGerando(true);
     try {
-      const [cartoes, tentativas] = await Promise.all([carregarCartoes({ materiaIds: ids }), repo.tentativas.listar()]);
+      const cartoes = await carregarCartoes({ materiaIds: ids });
       if (!cartoes.length) {
         setErro("Nenhum card nessas matérias.");
         return;
@@ -376,7 +379,6 @@ function Simulado({ materias }: { materias: Materia[] }) {
       setSobraram(restantes);
       setPedido(pedidoNumero);
       setJulgamentos({});
-      setHistorico(tentativas);
       tentativasDaProva.current = {};
       setProva(embaralhar(selecionadas));
       setIndice(0);
@@ -393,10 +395,13 @@ function Simulado({ materias }: { materias: Materia[] }) {
   async function julgar(questao: Cartao, acertou: boolean, motivo?: MotivoErro) {
     setErro(null);
     const nota = notaDeAcerto(acertou);
-    const agenda = calcularAgenda(questao, nota, { limiteDias: limiteDaProva(diasProva.get(questao.materiaId)) });
+    const confianca = confiancas[questao.id];
+    const agenda = calcularAgenda(questao, nota, {
+      limiteDias: limiteDaProva(diasProva.get(questao.materiaId)),
+      confianca,
+    });
     const idTentativa = tentativasDaProva.current[questao.id] ?? crypto.randomUUID();
     tentativasDaProva.current[questao.id] = idTentativa;
-    const confianca = confiancas[questao.id];
     try {
       await repo.questoes.registrarJulgamento(questao.id, agenda, {
         id: idTentativa,
@@ -405,27 +410,19 @@ function Simulado({ materias }: { materias: Materia[] }) {
         topicoId: questao.topicoId,
         pagina: questao.pagina,
         acertou,
+        nova: questao.julgadaEm == null,
         nota,
         ...(confianca ? { confianca } : {}),
         ...(!acertou && motivo ? { motivo } : {}),
       });
-      const registrada: Tentativa = {
-        id: idTentativa,
-        questaoId: questao.id,
-        materiaId: questao.materiaId,
-        pdfId: questao.pdfId,
-        topicoId: questao.topicoId,
-        pagina: questao.pagina,
-        acertou,
-        nota,
-        ...(confianca ? { confianca } : {}),
-        ...(!acertou && motivo ? { motivo } : {}),
-        em: instante(),
-      };
-      setHistorico((atuais) => [...atuais.filter((item) => item.id !== idTentativa), registrada]);
       setJulgamentos((atuais) => ({
         ...atuais,
-        [questao.id]: { acertou, texto: descreverVolta(agenda.proximaEm), motivo: !acertou ? motivo : undefined },
+        [questao.id]: {
+          acertou,
+          texto: descreverVolta(agenda.proximaEm),
+          erros: agenda.errosSeguidos,
+          motivo: !acertou ? motivo : undefined,
+        },
       }));
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível guardar o resultado."));
@@ -523,7 +520,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
                   {posicao + 1}. {origemDoCard(questao)}
                 </p>
                 <h2 className="mt-2 whitespace-pre-wrap font-serif text-2xl leading-snug">{frenteDoSimulado(questao)}</h2>
-                {emGargalo.has(questao.id) ? <AvisoGargalo /> : null}
+                {emGargalo(questao) ? <AvisoGargalo /> : null}
                 <p className="mt-4 text-sm text-muted">Sua resposta</p>
                 <p className="mt-1 whitespace-pre-wrap">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
                 <p className="mt-4 text-sm text-muted">Gabarito</p>
@@ -598,7 +595,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
       <article className="cartao mt-3 p-5" key={atual.id}>
         <p className="text-sm text-muted">{origemDoCard(atual)}</p>
         <h2 className="mt-4 whitespace-pre-wrap font-serif text-3xl leading-snug">{frenteDoSimulado(atual)}</h2>
-        {emGargalo.has(atual.id) ? <AvisoGargalo /> : null}
+        {emGargalo(atual) ? <AvisoGargalo /> : null}
         <label className="rotulo mt-6" htmlFor="resposta-simulado">
           Sua resposta
         </label>

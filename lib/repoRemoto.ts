@@ -66,6 +66,9 @@ type LinhaQuestao = {
   resposta: string;
   imagem_path: string | null;
   suspensa: boolean;
+  julgada_em: string | null;
+  erros_seguidos: number | null;
+  erro_com_certeza: boolean | null;
   status_revisao: StatusRevisao;
   sequencia: number;
   facilidade: number | null;
@@ -81,6 +84,7 @@ type LinhaTentativa = {
   topico_id: string | null;
   pagina: number | null;
   acertou: boolean;
+  nova: boolean | null;
   nota: number | null;
   confianca: number | null;
   motivo: string | null;
@@ -116,7 +120,14 @@ type AgendaCard = {
   statusRevisao: StatusRevisao;
   facilidade: number;
   intervaloDias: number;
+  errosSeguidos: number;
+  erroComCerteza: boolean;
+  julgadaEm: number | null;
 };
+
+const DIA_MS = 86_400_000;
+/** O Supabase devolve no máximo 1000 linhas por consulta: acima disso, é preciso pedir por páginas. */
+const LINHAS_POR_PAGINA = 1000;
 
 const cachePdf = new Map<string, Blob>();
 const cacheMarca = new Map<string, Blob>();
@@ -265,6 +276,25 @@ function checar(error: { message: string } | null, fallback: string) {
   throw new ErroEstudo(fallback);
 }
 
+type Consulta = PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>;
+
+/**
+ * Lê uma consulta inteira, página por página. Sem isto, tabelas com mais de 1000 linhas
+ * (as tentativas passam disso em poucos dias) vêm cortadas, sem nenhum aviso.
+ * A consulta precisa ter ordem fixa, senão uma página pode repetir ou pular linhas.
+ */
+export async function paginar<T>(montar: (de: number, ate: number) => Consulta, fallback: string): Promise<T[]> {
+  const todas: T[] = [];
+  for (let de = 0; ; de += LINHAS_POR_PAGINA) {
+    const { data, error } = await montar(de, de + LINHAS_POR_PAGINA - 1);
+    checar(error, fallback);
+    const lote = (data ?? []) as T[];
+    todas.push(...lote);
+    if (lote.length < LINHAS_POR_PAGINA) break;
+  }
+  return todas;
+}
+
 function porNome<T extends { nome: string }>(lista: T[]) {
   return lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 }
@@ -324,6 +354,9 @@ function questaoDe(linha: LinhaQuestao, imagem?: Blob): Questao {
     resposta: linha.resposta ?? "",
     ...(imagem ? { imagem } : {}),
     suspensa: Boolean(linha.suspensa),
+    julgadaEm: epoca(linha.julgada_em) ?? null,
+    errosSeguidos: linha.erros_seguidos ?? 0,
+    erroComCerteza: Boolean(linha.erro_com_certeza),
     statusRevisao: linha.status_revisao,
     sequencia: linha.sequencia ?? 0,
     ...(linha.facilidade != null ? { facilidade: linha.facilidade } : {}),
@@ -343,6 +376,7 @@ function tentativaDe(linha: LinhaTentativa): Tentativa {
     pagina: linha.pagina,
     acertou: linha.acertou,
     em: epocaObrigatoria(linha.em),
+    ...(linha.nova ? { nova: true } : {}),
     ...(linha.nota != null ? { nota: linha.nota as Nota } : {}),
     ...(linha.confianca != null ? { confianca: linha.confianca as Confianca } : {}),
     ...(linha.motivo ? { motivo: linha.motivo as MotivoErro } : {}),
@@ -450,23 +484,26 @@ async function cardsComImagens(linhas: LinhaQuestao[]) {
 
 async function caminhosDeMarcasDosPdfs(pdfIds: string[]) {
   if (!pdfIds.length) return [];
-  const { data, error } = await supabase().from("grifos").select("imagem_path").in("pdf_id", pdfIds);
-  checar(error, "Não foi possível ler as marcações.");
-  return ((data ?? []) as { imagem_path: string | null }[])
-    .map((linha) => linha.imagem_path)
-    .filter((caminho): caminho is string => Boolean(caminho));
+  const linhas = await paginar<{ imagem_path: string | null }>(
+    (de, ate) => supabase().from("grifos").select("imagem_path").in("pdf_id", pdfIds).order("id").range(de, ate),
+    "Não foi possível ler as marcações.",
+  );
+  return linhas.map((linha) => linha.imagem_path).filter((caminho): caminho is string => Boolean(caminho));
 }
 
 async function caminhosDeImagensDeCards(materiaId: string) {
-  const { data, error } = await supabase()
-    .from("questoes")
-    .select("imagem_path")
-    .eq("materia_id", materiaId)
-    .not("imagem_path", "is", null);
-  checar(error, "Não foi possível ler as imagens dos cards.");
-  return ((data ?? []) as { imagem_path: string | null }[])
-    .map((linha) => linha.imagem_path)
-    .filter((caminho): caminho is string => Boolean(caminho));
+  const linhas = await paginar<{ imagem_path: string | null }>(
+    (de, ate) =>
+      supabase()
+        .from("questoes")
+        .select("imagem_path")
+        .eq("materia_id", materiaId)
+        .not("imagem_path", "is", null)
+        .order("id")
+        .range(de, ate),
+    "Não foi possível ler as imagens dos cards.",
+  );
+  return linhas.map((linha) => linha.imagem_path).filter((caminho): caminho is string => Boolean(caminho));
 }
 
 function ordenarCards(lista: Questao[]) {
@@ -476,9 +513,11 @@ function ordenarCards(lista: Questao[]) {
 export const repoRemoto = {
   materias: {
     async listar(): Promise<Materia[]> {
-      const { data, error } = await supabase().from("materias").select("*");
-      checar(error, "Não foi possível ler as matérias.");
-      return porNome(((data ?? []) as LinhaMateria[]).map(materiaDe));
+      const linhas = await paginar<LinhaMateria>(
+        (de, ate) => supabase().from("materias").select("*").order("id").range(de, ate),
+        "Não foi possível ler as matérias.",
+      );
+      return porNome(linhas.map(materiaDe));
     },
     async obter(idMateria: string): Promise<Materia | null> {
       const { data, error } = await supabase().from("materias").select("*").eq("id", idMateria).maybeSingle();
@@ -547,16 +586,20 @@ export const repoRemoto = {
 
   pdfs: {
     async listarTodos(): Promise<PdfDoc[]> {
-      const { data, error } = await supabase().from("pdfs").select("*");
-      checar(error, "Não foi possível ler os PDFs.");
-      return ((data ?? []) as LinhaPdf[])
+      const linhas = await paginar<LinhaPdf>(
+        (de, ate) => supabase().from("pdfs").select("*").order("id").range(de, ate),
+        "Não foi possível ler os PDFs.",
+      );
+      return linhas
         .map((linha) => pdfDe(linha))
         .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
     },
     async listarPorMateria(materiaId: string): Promise<PdfDoc[]> {
-      const { data, error } = await supabase().from("pdfs").select("*").eq("materia_id", materiaId);
-      checar(error, "Não foi possível ler os PDFs.");
-      return ((data ?? []) as LinhaPdf[])
+      const linhas = await paginar<LinhaPdf>(
+        (de, ate) => supabase().from("pdfs").select("*").eq("materia_id", materiaId).order("id").range(de, ate),
+        "Não foi possível ler os PDFs.",
+      );
+      return linhas
         .map((linha) => pdfDe(linha))
         .sort((a, b) => a.createdAt - b.createdAt);
     },
@@ -659,9 +702,11 @@ export const repoRemoto = {
 
   grifos: {
     async listarPorPdf(pdfId: string) {
-      const { data, error } = await supabase().from("grifos").select("*").eq("pdf_id", pdfId);
-      checar(error, "Não foi possível ler os grifos.");
-      const lista = await comImagens((data ?? []) as LinhaGrifo[]);
+      const linhas = await paginar<LinhaGrifo>(
+        (de, ate) => supabase().from("grifos").select("*").eq("pdf_id", pdfId).order("id").range(de, ate),
+        "Não foi possível ler os grifos.",
+      );
+      const lista = await comImagens(linhas);
       return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
     async criar(entrada: { pdfId: string; pagina: number; texto: string; cor: CorGrifo; rects: Rect[]; imagem?: Blob }) {
@@ -731,9 +776,11 @@ export const repoRemoto = {
 
   postits: {
     async listarPorPdf(pdfId: string) {
-      const { data, error } = await supabase().from("postits").select("*").eq("pdf_id", pdfId);
-      checar(error, "Não foi possível ler os post-its.");
-      return ((data ?? []) as LinhaPostit[])
+      const linhas = await paginar<LinhaPostit>(
+        (de, ate) => supabase().from("postits").select("*").eq("pdf_id", pdfId).order("id").range(de, ate),
+        "Não foi possível ler os post-its.",
+      );
+      return linhas
         .map(postitDe)
         .sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
@@ -797,26 +844,63 @@ export const repoRemoto = {
 
   questoes: {
     async listarPorPdf(pdfId: string) {
-      const { data, error } = await supabase().from("questoes").select("*").eq("pdf_id", pdfId);
-      checar(error, "Não foi possível ler os cards.");
-      const lista = await cardsComImagens((data ?? []) as LinhaQuestao[]);
-      return lista.sort((a, b) => (a.pagina ?? 0) - (b.pagina ?? 0) || a.createdAt - b.createdAt);
+      const linhas = await paginar<LinhaQuestao>(
+        (de, ate) => supabase().from("questoes").select("*").eq("pdf_id", pdfId).order("id").range(de, ate),
+        "Não foi possível ler os cards.",
+      );
+      return linhas
+        .map((linha) => questaoDe(linha))
+        .sort((a, b) => (a.pagina ?? 0) - (b.pagina ?? 0) || a.createdAt - b.createdAt);
     },
     async listarPorMateria(materiaId: string) {
-      const { data, error } = await supabase().from("questoes").select("*").eq("materia_id", materiaId);
-      checar(error, "Não foi possível ler os cards.");
-      return ordenarCards(await cardsComImagens((data ?? []) as LinhaQuestao[]));
+      const linhas = await paginar<LinhaQuestao>(
+        (de, ate) => supabase().from("questoes").select("*").eq("materia_id", materiaId).order("id").range(de, ate),
+        "Não foi possível ler os cards.",
+      );
+      return ordenarCards(linhas.map((linha) => questaoDe(linha)));
     },
+    /** Lista completa, sem baixar as figuras (as telas de lista não as mostram). */
     async listarTodas() {
-      const { data, error } = await supabase().from("questoes").select("*");
-      checar(error, "Não foi possível ler os cards.");
-      return ordenarCards(await cardsComImagens((data ?? []) as LinhaQuestao[]));
+      const linhas = await paginar<LinhaQuestao>(
+        (de, ate) => supabase().from("questoes").select("*").order("id").range(de, ate),
+        "Não foi possível ler os cards.",
+      );
+      return ordenarCards(linhas.map((linha) => questaoDe(linha)));
+    },
+    /** Só o que venceu, já com as figuras: é o que a revisão do dia usa. */
+    async listarVencidas(agora = Date.now()) {
+      const linhas = await paginar<LinhaQuestao>(
+        (de, ate) =>
+          supabase()
+            .from("questoes")
+            .select("*")
+            .eq("suspensa", false)
+            .or(`proxima_em.is.null,proxima_em.lte.${iso(agora)}`)
+            .order("id")
+            .range(de, ate),
+        "Não foi possível ler os cards vencidos.",
+      );
+      return ordenarCards(await cardsComImagens(linhas));
+    },
+    /** Os próximos a vencer, para "estudar adiantado". */
+    async listarProximas(quantidade: number, agora = Date.now()) {
+      const { data, error } = await supabase()
+        .from("questoes")
+        .select("*")
+        .eq("suspensa", false)
+        .gt("proxima_em", iso(agora))
+        .order("proxima_em", { ascending: true })
+        .limit(quantidade);
+      checar(error, "Não foi possível ler os próximos cards.");
+      return cardsComImagens((data ?? []) as LinhaQuestao[]);
     },
     async contarPorMateria(): Promise<Record<string, number>> {
-      const { data, error } = await supabase().from("questoes").select("materia_id");
-      checar(error, "Não foi possível contar os cards.");
+      const linhas = await paginar<{ materia_id: string }>(
+        (de, ate) => supabase().from("questoes").select("materia_id").order("id").range(de, ate),
+        "Não foi possível contar os cards.",
+      );
       const contagem: Record<string, number> = {};
-      for (const linha of (data ?? []) as { materia_id: string }[]) {
+      for (const linha of linhas) {
         contagem[linha.materia_id] = (contagem[linha.materia_id] ?? 0) + 1;
       }
       return contagem;
@@ -860,6 +944,9 @@ export const repoRemoto = {
         resposta: textos.resposta,
         ...(entrada.imagem ? { imagem: entrada.imagem } : {}),
         suspensa: false,
+        julgadaEm: null,
+        errosSeguidos: 0,
+        erroComCerteza: false,
         statusRevisao: "nova",
         sequencia: 0,
         facilidade: 2.5,
@@ -888,6 +975,9 @@ export const repoRemoto = {
         resposta: questao.resposta,
         imagem_path: imagemPath,
         suspensa: false,
+        julgada_em: null,
+        erros_seguidos: 0,
+        erro_com_certeza: false,
         status_revisao: questao.statusRevisao,
         sequencia: 0,
         facilidade: 2.5,
@@ -950,6 +1040,9 @@ export const repoRemoto = {
           intervalo_dias: entrada.intervaloDias,
           proxima_em: iso(entrada.proximaEm),
           status_revisao: entrada.statusRevisao,
+          erros_seguidos: entrada.errosSeguidos,
+          erro_com_certeza: entrada.erroComCerteza,
+          julgada_em: entrada.julgadaEm == null ? null : iso(entrada.julgadaEm),
         })
         .eq("id", questaoId)
         .select("id");
@@ -963,6 +1056,7 @@ export const repoRemoto = {
         topico_id: tentativa.topicoId,
         pagina: tentativa.pagina,
         acertou: tentativa.acertou,
+        nova: Boolean(tentativa.nova),
         nota: tentativa.nota ?? null,
         confianca: tentativa.confianca ?? null,
         motivo: tentativa.motivo ?? null,
@@ -980,6 +1074,9 @@ export const repoRemoto = {
           intervalo_dias: anterior.intervaloDias,
           proxima_em: iso(anterior.proximaEm),
           status_revisao: anterior.statusRevisao,
+          erros_seguidos: anterior.errosSeguidos,
+          erro_com_certeza: anterior.erroComCerteza,
+          julgada_em: anterior.julgadaEm == null ? null : iso(anterior.julgadaEm),
         })
         .eq("id", questaoId)
         .select("id");
@@ -1009,18 +1106,24 @@ export const repoRemoto = {
   },
 
   tentativas: {
-    async listar(): Promise<Tentativa[]> {
-      const { data, error } = await supabase().from("tentativas").select("*");
-      checar(error, "Não foi possível ler os resultados.");
-      return ((data ?? []) as LinhaTentativa[]).map(tentativaDe);
+    /** Sem janela, devolve todo o histórico. Com `desdeDias`, só o período recente. */
+    async listar(opcoes: { desdeDias?: number } = {}): Promise<Tentativa[]> {
+      const desde = opcoes.desdeDias == null ? null : iso(Date.now() - opcoes.desdeDias * DIA_MS);
+      const linhas = await paginar<LinhaTentativa>((de, ate) => {
+        const consulta = supabase().from("tentativas").select("*");
+        return (desde ? consulta.gte("em", desde) : consulta).order("id").range(de, ate);
+      }, "Não foi possível ler os resultados.");
+      return linhas.map(tentativaDe);
     },
   },
 
   editais: {
     async listar(): Promise<Edital[]> {
-      const { data, error } = await supabase().from("editais").select("*");
-      checar(error, "Não foi possível ler os editais.");
-      return porNome(((data ?? []) as LinhaEdital[]).map(editalDe));
+      const linhas = await paginar<LinhaEdital>(
+        (de, ate) => supabase().from("editais").select("*").order("id").range(de, ate),
+        "Não foi possível ler os editais.",
+      );
+      return porNome(linhas.map(editalDe));
     },
     async obter(editalId: string): Promise<Edital | null> {
       const { data, error } = await supabase().from("editais").select("*").eq("id", editalId).maybeSingle();
@@ -1067,9 +1170,11 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async vinculos(): Promise<EditalMateria[]> {
-      const { data, error } = await supabase().from("edital_materias").select("*");
-      checar(error, "Não foi possível ler os vínculos dos editais.");
-      return ((data ?? []) as LinhaVinculo[]).map(vinculoDe);
+      const linhas = await paginar<LinhaVinculo>(
+        (de, ate) => supabase().from("edital_materias").select("*").order("id").range(de, ate),
+        "Não foi possível ler os vínculos dos editais.",
+      );
+      return linhas.map(vinculoDe);
     },
     async materias(editalId: string): Promise<string[]> {
       const { data, error } = await supabase()
@@ -1124,14 +1229,18 @@ export const repoRemoto = {
 
   topicos: {
     async listarTodos(): Promise<EditalTopico[]> {
-      const { data, error } = await supabase().from("edital_topicos").select("*");
-      checar(error, "Não foi possível ler os tópicos.");
-      return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
+      const linhas = await paginar<LinhaTopico>(
+        (de, ate) => supabase().from("edital_topicos").select("*").order("id").range(de, ate),
+        "Não foi possível ler os tópicos.",
+      );
+      return linhas.map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
     },
     async listarPorEdital(editalId: string): Promise<EditalTopico[]> {
-      const { data, error } = await supabase().from("edital_topicos").select("*").eq("edital_id", editalId);
-      checar(error, "Não foi possível ler os tópicos.");
-      return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
+      const linhas = await paginar<LinhaTopico>(
+        (de, ate) => supabase().from("edital_topicos").select("*").eq("edital_id", editalId).order("id").range(de, ate),
+        "Não foi possível ler os tópicos.",
+      );
+      return linhas.map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
     },
     async criar(entrada: { editalId: string; materiaId: string | null; nome: string; peso: number }) {
       const edital = await repoRemoto.editais.obter(entrada.editalId);
@@ -1203,9 +1312,11 @@ export const repoRemoto = {
 
   lancamentos: {
     async listar(): Promise<Lancamento[]> {
-      const { data, error } = await supabase().from("lancamentos").select("*");
-      checar(error, "Não foi possível ler os lançamentos.");
-      return ((data ?? []) as LinhaLancamento[]).map(lancamentoDe).sort((a, b) => b.em - a.em);
+      const linhas = await paginar<LinhaLancamento>(
+        (de, ate) => supabase().from("lancamentos").select("*").order("id").range(de, ate),
+        "Não foi possível ler os lançamentos.",
+      );
+      return linhas.map(lancamentoDe).sort((a, b) => b.em - a.em);
     },
     async criar(entrada: { materiaId: string; feitas: number; acertos: number; fonte: string }) {
       validarLancamento(entrada.feitas, entrada.acertos);
@@ -1240,9 +1351,11 @@ export const repoRemoto = {
 
   estudos: {
     async listar(): Promise<Estudo[]> {
-      const { data, error } = await supabase().from("estudos").select("*");
-      checar(error, "Não foi possível ler o tempo de estudo.");
-      return ((data ?? []) as LinhaEstudo[]).map(estudoDe);
+      const linhas = await paginar<LinhaEstudo>(
+        (de, ate) => supabase().from("estudos").select("*").order("id").range(de, ate),
+        "Não foi possível ler o tempo de estudo.",
+      );
+      return linhas.map(estudoDe);
     },
     async registrar(entrada: { materiaId: string | null; segundos: number; em?: number }) {
       const segundos = Math.round(entrada.segundos);

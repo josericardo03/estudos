@@ -28,6 +28,10 @@ export type Agenda = {
   intervaloDias: number;
   proximaEm: number;
   statusRevisao: StatusRevisao;
+  errosSeguidos: number;
+  erroComCerteza: boolean;
+  /** Quando o card foi julgado pela primeira vez. */
+  julgadaEm: number | null;
 };
 
 export function estaDevida(questao: Questao, agora = Date.now()) {
@@ -63,10 +67,11 @@ export function limiteDaProva(diasAteProva: number | null | undefined) {
 export function calcularAgenda(
   questao: Questao,
   nota: Nota,
-  opcoes: { agora?: number; limiteDias?: number | null } = {},
+  opcoes: { agora?: number; limiteDias?: number | null; confianca?: Confianca | null } = {},
 ): Agenda {
   const agora = opcoes.agora ?? Date.now();
   const facilidadeAtual = questao.facilidade ?? FACILIDADE_INICIAL;
+  const julgadaEm = questao.julgadaEm ?? agora;
 
   if (nota === 1) {
     return {
@@ -75,6 +80,9 @@ export function calcularAgenda(
       intervaloDias: 0,
       proximaEm: agora,
       statusRevisao: "revisar",
+      errosSeguidos: (questao.errosSeguidos ?? 0) + 1,
+      erroComCerteza: opcoes.confianca === 3,
+      julgadaEm,
     };
   }
 
@@ -106,6 +114,9 @@ export function calcularAgenda(
     intervaloDias: dias,
     proximaEm: somarDias(agora, dias),
     statusRevisao: dias >= DIAS_PARA_DOMINADA ? "dominada" : "nova",
+    errosSeguidos: 0,
+    erroComCerteza: false,
+    julgadaEm,
   };
 }
 
@@ -126,7 +137,7 @@ export function descreverIntervalo(dias: number) {
 /** O que cada botão vai agendar, para mostrar "Bom · 3 dias" antes do clique. */
 export function previsaoDasNotas(
   questao: Questao,
-  opcoes: { agora?: number; limiteDias?: number | null } = {},
+  opcoes: { agora?: number; limiteDias?: number | null; confianca?: Confianca | null } = {},
 ): Record<Nota, { dias: number; texto: string }> {
   const resultado = {} as Record<Nota, { dias: number; texto: string }>;
   for (const nota of [1, 2, 3, 4] as const) {
@@ -266,60 +277,9 @@ export function separarSimulado<T extends Questao>(questoes: T[], agora = Date.n
   return { entram, esperando };
 }
 
-type TentativaMinima = Pick<Tentativa, "questaoId" | "acertou" | "em"> & { confianca?: Confianca };
-
-function porQuestao<T extends TentativaMinima>(tentativas: T[]) {
-  const mapa = new Map<string, T[]>();
-  for (const item of tentativas) {
-    const lista = mapa.get(item.questaoId);
-    if (lista) lista.push(item);
-    else mapa.set(item.questaoId, [item]);
-  }
-  for (const lista of mapa.values()) lista.sort((a, b) => b.em - a.em);
-  return mapa;
-}
-
-/** Erros seguidos de cada questão, do mais recente para trás. Uma passada só. */
-export function errosSeguidosPorQuestao(tentativas: TentativaMinima[]) {
-  const resultado = new Map<string, number>();
-  for (const [questaoId, lista] of porQuestao(tentativas)) {
-    let seguidos = 0;
-    for (const item of lista) {
-      if (item.acertou) break;
-      seguidos += 1;
-    }
-    if (seguidos > 0) resultado.set(questaoId, seguidos);
-  }
-  return resultado;
-}
-
-export function gargalos(tentativas: TentativaMinima[]) {
-  const ids = new Set<string>();
-  for (const [questaoId, seguidos] of errosSeguidosPorQuestao(tentativas)) {
-    if (seguidos >= ERROS_PARA_GARGALO) ids.add(questaoId);
-  }
-  return ids;
-}
-
-export function errosSeguidos(tentativas: TentativaMinima[], questaoId: string) {
-  return errosSeguidosPorQuestao(tentativas.filter((item) => item.questaoId === questaoId)).get(questaoId) ?? 0;
-}
-
-export function ehGargalo(tentativas: TentativaMinima[], questaoId: string) {
-  return errosSeguidos(tentativas, questaoId) >= ERROS_PARA_GARGALO;
-}
-
-/**
- * Questões cujo último erro veio com "tenho certeza": o efeito de hipercorreção
- * diz que esses erros são os que mais rendem quando corrigidos.
- */
-export function hipercorrecoes(tentativas: TentativaMinima[]) {
-  const ids = new Set<string>();
-  for (const [questaoId, lista] of porQuestao(tentativas)) {
-    const ultima = lista[0];
-    if (ultima && !ultima.acertou && ultima.confianca === 3) ids.add(questaoId);
-  }
-  return ids;
+/** Três erros seguidos: o card pede releitura da teoria antes de insistir. */
+export function ehGargalo(questao: Pick<Questao, "errosSeguidos">) {
+  return (questao.errosSeguidos ?? 0) >= ERROS_PARA_GARGALO;
 }
 
 /** Uma de cada matéria por vez, mantendo a ordem de prioridade dentro de cada uma. */
@@ -343,47 +303,44 @@ export function intercalarPorMateria<T extends Questao>(ordenadas: T[]) {
 export const LIMITE_NOVOS_PADRAO = 20;
 export const LIMITE_REVISOES_PADRAO = 200;
 
-/** Quantos cards novos você começou e quantas revisões fez hoje. */
-export function resumoDoDia(tentativas: TentativaMinima[], agora = Date.now()) {
+type TentativaDoDia = Pick<Tentativa, "em" | "nova">;
+
+/**
+ * Quantos cards novos você começou e quantas revisões fez hoje. Só olha as tentativas de hoje,
+ * graças ao campo "nova" de cada tentativa: não precisa do histórico inteiro.
+ */
+export function resumoDoDia(tentativas: TentativaDoDia[], agora = Date.now()) {
   const comeco = inicioDoDia(agora);
+  let novos = 0;
   let revisoes = 0;
-  const novos = new Set<string>();
-  for (const [questaoId, lista] of porQuestao(tentativas)) {
-    const primeira = lista[lista.length - 1];
-    for (const item of lista) {
-      if (item.em < comeco) continue;
-      if (item === primeira) novos.add(questaoId);
-      else revisoes += 1;
-    }
+  for (const item of tentativas) {
+    if (item.em < comeco) continue;
+    if (item.nova) novos += 1;
+    else revisoes += 1;
   }
-  return { novos: novos.size, revisoes };
+  return { novos, revisoes };
 }
 
 /**
  * Fila do dia, como no Anki: só o que venceu, com teto de cards novos e de revisões
- * por dia. Primeiro as revisões (hipercorreções, depois erros, depois as mais
+ * por dia. Primeiro as revisões (erros com certeza, depois erros, depois as mais
  * atrasadas), depois os cards novos. As matérias se intercalam em cada grupo.
  */
 export function filaDeHoje<T extends Questao>(
   questoes: T[],
-  tentativas: TentativaMinima[],
+  tentativasDeHoje: TentativaDoDia[],
   opcoes: { agora?: number; limiteNovos?: number; limiteRevisoes?: number } = {},
 ) {
   const agora = opcoes.agora ?? Date.now();
   const limiteNovos = opcoes.limiteNovos ?? LIMITE_NOVOS_PADRAO;
   const limiteRevisoes = opcoes.limiteRevisoes ?? LIMITE_REVISOES_PADRAO;
-  const feitoHoje = resumoDoDia(tentativas, agora);
-  const julgadas = new Set(tentativas.map((item) => item.questaoId));
-  const hiper = hipercorrecoes(tentativas);
-  const peso = (questao: T) => (hiper.has(questao.id) ? 0 : questao.statusRevisao === "revisar" ? 1 : 2);
+  const feitoHoje = resumoDoDia(tentativasDeHoje, agora);
+  const julgada = (questao: T) => questao.julgadaEm != null;
+  const peso = (questao: T) => (questao.erroComCerteza ? 0 : questao.statusRevisao === "revisar" ? 1 : 2);
 
   const devidas = questoes.filter((questao) => estaDevida(questao, agora));
-  const novas = devidas
-    .filter((questao) => !julgadas.has(questao.id))
-    .sort((a, b) => a.createdAt - b.createdAt);
-  const revisoes = devidas
-    .filter((questao) => julgadas.has(questao.id))
-    .sort((a, b) => peso(a) - peso(b) || maisAtrasada(a, b));
+  const novas = devidas.filter((questao) => !julgada(questao)).sort((a, b) => a.createdAt - b.createdAt);
+  const revisoes = devidas.filter(julgada).sort((a, b) => peso(a) - peso(b) || maisAtrasada(a, b));
 
   const vagasNovas = Math.max(0, limiteNovos - feitoHoje.novos);
   const vagasRevisoes = Math.max(0, limiteRevisoes - feitoHoje.revisoes);

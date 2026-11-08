@@ -1,3 +1,4 @@
+import { registrarCopia } from "./copias";
 import { chaveDia } from "./datas";
 import { getDb } from "./db";
 import { ErroEstudo } from "./erros";
@@ -74,6 +75,7 @@ export async function baixarBackup() {
   link.href = url;
   link.download = `foco-backup-${chaveDia(Date.now())}.json`;
   link.click();
+  registrarCopia();
   setTimeout(() => URL.revokeObjectURL(url), 1500);
   return blob.size;
 }

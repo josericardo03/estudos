@@ -138,6 +138,52 @@ function inicioDoTrecho(pagina: number) {
   return Math.floor((pagina - 1) / PAGINAS_POR_TRECHO) * PAGINAS_POR_TRECHO + 1;
 }
 
+/**
+ * Taxa e "força" de cada matéria, somando o app e as questões lançadas de fora.
+ * Só precisa das tentativas e dos lançamentos, então a tela Hoje a usa sem carregar os cards.
+ */
+export function desempenhoDasMaterias(entrada: {
+  materias: Materia[];
+  tentativas: Tentativa[];
+  lancamentos?: Lancamento[];
+  agora?: number;
+  caminhoMateria: (materiaId: string) => string;
+}): GrupoMateria[] {
+  const agora = entrada.agora ?? Date.now();
+  const porMateria = agrupar(entrada.tentativas, (item) => item.materiaId);
+  const lancamentosDaMateria = agrupar(entrada.lancamentos ?? [], (item) => item.materiaId);
+  return entrada.materias
+    .map((materia): GrupoMateria => {
+      const internas = porMateria.get(materia.id) ?? [];
+      const externas = lancamentosDaMateria.get(materia.id) ?? [];
+      const soma = novaSoma();
+      for (const item of internas) somar(soma, item, agora);
+      const externasFeitas = externas.reduce((total, item) => total + item.feitas, 0);
+      const externasAcertos = externas.reduce((total, item) => total + item.acertos, 0);
+      const total = soma.total + externasFeitas;
+      const acertos = soma.acertos + externasAcertos;
+      return {
+        id: materia.id,
+        nome: materia.nome,
+        href: entrada.caminhoMateria(materia.id),
+        internas: soma.total,
+        internasAcertos: soma.acertos,
+        externas: externasFeitas,
+        externasAcertos,
+        total,
+        acertos,
+        taxa: taxaDe(acertos, total),
+        forca: forcaDe(soma, { feitas: externasFeitas, acertos: externasAcertos }),
+      };
+    })
+    .sort((a, b) => {
+      if (a.taxa === null && b.taxa === null) return a.nome.localeCompare(b.nome, "pt-BR");
+      if (a.taxa === null) return 1;
+      if (b.taxa === null) return -1;
+      return a.forca - b.forca || a.nome.localeCompare(b.nome, "pt-BR");
+    });
+}
+
 export function montarDesempenho(entrada: {
   materias: Materia[];
   pdfs: PdfResumo[];
@@ -161,8 +207,6 @@ export function montarDesempenho(entrada: {
   const tentativasPorPdf = agrupar(entrada.tentativas, (item) => item.pdfId);
   const tentativasPorTopico = agrupar(entrada.tentativas, (item) => item.topicoId);
   const tentativasPorQuestao = agrupar(entrada.tentativas, (item) => item.questaoId);
-  const tentativasPorMateria = agrupar(entrada.tentativas, (item) => item.materiaId);
-  const lancamentosPorMateria = agrupar(lancamentos, (item) => item.materiaId);
 
   const pdfs = entrada.pdfs
     .map((pdf) =>
@@ -224,36 +268,13 @@ export function montarDesempenho(entrada: {
     })
     .sort(compararFraqueza);
 
-  const materias = entrada.materias
-    .map((materia): GrupoMateria => {
-      const internas = tentativasPorMateria.get(materia.id) ?? [];
-      const externas = lancamentosPorMateria.get(materia.id) ?? [];
-      const soma = novaSoma();
-      for (const item of internas) somar(soma, item, agora);
-      const externasFeitas = externas.reduce((total, item) => total + item.feitas, 0);
-      const externasAcertos = externas.reduce((total, item) => total + item.acertos, 0);
-      const total = soma.total + externasFeitas;
-      const acertos = soma.acertos + externasAcertos;
-      return {
-        id: materia.id,
-        nome: materia.nome,
-        href: entrada.caminhoMateria(materia.id),
-        internas: soma.total,
-        internasAcertos: soma.acertos,
-        externas: externasFeitas,
-        externasAcertos,
-        total,
-        acertos,
-        taxa: taxaDe(acertos, total),
-        forca: forcaDe(soma, { feitas: externasFeitas, acertos: externasAcertos }),
-      };
-    })
-    .sort((a, b) => {
-      if (a.taxa === null && b.taxa === null) return a.nome.localeCompare(b.nome, "pt-BR");
-      if (a.taxa === null) return 1;
-      if (b.taxa === null) return -1;
-      return a.forca - b.forca || a.nome.localeCompare(b.nome, "pt-BR");
-    });
+  const materias = desempenhoDasMaterias({
+    materias: entrada.materias,
+    tentativas: entrada.tentativas,
+    lancamentos,
+    agora,
+    caminhoMateria: entrada.caminhoMateria,
+  });
 
   const comErro: QuestaoFraca[] = [];
   for (const questao of entrada.questoes) {

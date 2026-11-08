@@ -10,6 +10,9 @@ import { caminhoBanco, caminhoMateria, caminhoPdf } from "@/lib/rotas";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar } from "./ui";
 
+/** O histórico cresce sem parar; a análise olha os últimos seis meses, que são os que ainda dizem algo. */
+const JANELA_DIAS = 180;
+
 function corDaTaxa(taxa: number) {
   if (taxa >= 0.8) return "var(--pine)";
   if (taxa >= 0.5) return "var(--media)";
@@ -118,7 +121,7 @@ export function Desempenho() {
       repo.pdfs.listarTodos(),
       repo.topicos.listarTodos(),
       repo.questoes.listarTodas(),
-      repo.tentativas.listar(),
+      repo.tentativas.listar({ desdeDias: JANELA_DIAS }),
       repo.lancamentos.listar(),
     ]);
     return {
@@ -173,12 +176,12 @@ export function Desempenho() {
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Desempenho</h1>
       <p className="mt-3 max-w-xl text-muted">
         A média sai dos cards que você revisou aqui e das questões que você lança de fora, como as do Tec
-        Concursos. Tentativas recentes pesam mais que as antigas na ordem dos mais fracos.
+        Concursos. Vale o que você fez nos últimos 6 meses, e o mais recente pesa mais na ordem dos mais fracos.
       </p>
 
       <div className="mt-8 grid gap-3 sm:grid-cols-3">
         <article className="cartao p-4">
-          <p className="text-sm text-muted">Média geral</p>
+          <p className="text-sm text-muted">Média (6 meses)</p>
           <p className="mt-2 font-serif text-4xl" style={{ color: resumo.geral.taxa === null ? "var(--muted)" : corDaTaxa(resumo.geral.taxa) }}>
             {resumo.geral.taxa === null ? "—" : `${porcentagem(resumo.geral.taxa)}%`}
           </p>

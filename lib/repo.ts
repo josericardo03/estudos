@@ -58,7 +58,12 @@ type AgendaCard = {
   statusRevisao: StatusRevisao;
   facilidade: number;
   intervaloDias: number;
+  errosSeguidos: number;
+  erroComCerteza: boolean;
+  julgadaEm: number | null;
 };
+
+const DIA_MS = 86_400_000;
 
 type EntradaCard = {
   materiaId: string;
@@ -301,6 +306,20 @@ const repoLocal = {
         .questoes.filter((questao) => !questao.suspensa && (questao.proximaEm ?? 0) <= agora)
         .count();
     },
+    /** Só o que venceu: é o que a revisão do dia precisa, sem carregar o banco inteiro. */
+    async listarVencidas(agora = Date.now()) {
+      const lista = await getDb()
+        .questoes.filter((questao) => !questao.suspensa && (questao.proximaEm ?? 0) <= agora)
+        .toArray();
+      return lista.sort((a, b) => a.createdAt - b.createdAt);
+    },
+    /** Os próximos a vencer, para "estudar adiantado". */
+    async listarProximas(quantidade: number, agora = Date.now()) {
+      const lista = await getDb()
+        .questoes.filter((questao) => !questao.suspensa && (questao.proximaEm ?? 0) > agora)
+        .toArray();
+      return lista.sort((a, b) => (a.proximaEm ?? 0) - (b.proximaEm ?? 0)).slice(0, quantidade);
+    },
     async contarPorMateria(): Promise<Record<string, number>> {
       const contagem: Record<string, number> = {};
       await getDb().questoes.each((questao) => {
@@ -330,6 +349,9 @@ const repoLocal = {
         resposta: textos.resposta,
         ...(entrada.imagem ? { imagem: entrada.imagem } : {}),
         suspensa: false,
+        julgadaEm: null,
+        errosSeguidos: 0,
+        erroComCerteza: false,
         statusRevisao: "nova",
         sequencia: 0,
         facilidade: 2.5,
@@ -386,8 +408,14 @@ const repoLocal = {
   },
 
   tentativas: {
-    async listar(): Promise<Tentativa[]> {
-      return getDb().tentativas.toArray();
+    /** Sem janela, devolve todo o histórico. Com `desdeDias`, só o período recente. */
+    async listar(opcoes: { desdeDias?: number } = {}): Promise<Tentativa[]> {
+      const tabela = getDb().tentativas;
+      if (opcoes.desdeDias == null) return tabela.toArray();
+      return tabela
+        .where("em")
+        .aboveOrEqual(Date.now() - opcoes.desdeDias * DIA_MS)
+        .toArray();
     },
   },
 
