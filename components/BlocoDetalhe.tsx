@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { gerarCloze } from "@/lib/cloze";
+import { formatarData } from "@/lib/datas";
 import { mensagemErro } from "@/lib/erros";
 import { descreverFaixa } from "@/lib/faixa";
 import { repo } from "@/lib/repo";
@@ -26,6 +28,8 @@ export function BlocoDetalhe({
   const [enunciado, setEnunciado] = useState("");
   const [resposta, setResposta] = useState("");
   const [guardando, setGuardando] = useState(false);
+  const [resumoRascunho, setResumoRascunho] = useState<string | null>(null);
+  const [finalizando, setFinalizando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
     const materia = await repo.materias.obter(materiaId);
     const pdf = await repo.pdfs.obter(pdfId);
@@ -48,6 +52,40 @@ export function BlocoDetalhe({
 
   const { bloco, pdf, materia, grifos, postits, questoes } = dados;
   const finalizado = bloco.status === "finalizado";
+  const resumo = resumoRascunho ?? bloco.resumo ?? "";
+
+  async function finalizar() {
+    setFinalizando(true);
+    setErro(null);
+    try {
+      await repo.blocos.finalizar(blocoId, resumo);
+      setResumoRascunho(null);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível finalizar o bloco."));
+    } finally {
+      setFinalizando(false);
+    }
+  }
+
+  async function guardarResumo() {
+    setErro(null);
+    try {
+      if (!resumo.trim()) throw new Error("vazio");
+      await repo.blocos.salvarResumo(blocoId, resumo);
+      setResumoRascunho(null);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Escreva o resumo antes de guardar."));
+    }
+  }
+
+  function virarQuestao(texto: string) {
+    const { enunciado: novoEnunciado, resposta: novaResposta } = gerarCloze(texto);
+    setEnunciado(novoEnunciado);
+    setResposta(novaResposta);
+    const campo = document.getElementById("enunciado");
+    campo?.scrollIntoView({ behavior: "smooth", block: "center" });
+    campo?.focus();
+  }
 
   async function criarQuestao(evento: React.FormEvent) {
     evento.preventDefault();
@@ -110,27 +148,61 @@ export function BlocoDetalhe({
         {questoes.length === 0 ? (
           <p className="mt-2 text-sm text-muted">Este bloco ainda não tem questões.</p>
         ) : null}
-        <div className="mt-3">
+        <div className="mt-4">
+          <label className="rotulo" htmlFor="resumo-bloco">
+            Resumo com as suas palavras (3 linhas bastam)
+          </label>
+          <textarea
+            id="resumo-bloco"
+            className="campo min-h-24"
+            value={resumo}
+            onChange={(evento) => setResumoRascunho(evento.target.value)}
+            placeholder="O que este trecho diz? Explique como se ensinasse a alguém, sem olhar o PDF."
+          />
+          <p className="mt-1 text-sm text-muted">
+            Escrever de memória fixa mais do que reler. O resumo volta nas releituras do bloco.
+          </p>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {finalizado ? (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void repo.blocos.definirStatus(bloco.id, "estudando").catch((falha) => {
-                setErro(mensagemErro(falha, "Não foi possível reabrir o bloco."));
-              })}
-            >
-              Reabrir bloco
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={resumo.trim() === (bloco.resumo ?? "") || !resumo.trim()}
+                onClick={() => void guardarResumo()}
+              >
+                Guardar resumo
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void repo.blocos.definirStatus(bloco.id, "estudando").catch((falha) => {
+                  setErro(mensagemErro(falha, "Não foi possível reabrir o bloco."));
+                })}
+              >
+                Reabrir bloco
+              </button>
+              {bloco.proximaRevisaoEm ? (
+                <span className="text-sm text-muted">
+                  Próxima releitura: {formatarData(bloco.proximaRevisaoEm, { day: "numeric", month: "long" })}
+                  {" · "}
+                  {bloco.revisoes ?? 0} {(bloco.revisoes ?? 0) === 1 ? "feita" : "feitas"}
+                </span>
+              ) : null}
+            </>
           ) : (
-            <button
-              type="button"
-              className="btn btn-primario"
-              onClick={() => void repo.blocos.definirStatus(bloco.id, "finalizado").catch((falha) => {
-                setErro(mensagemErro(falha, "Não foi possível finalizar o bloco."));
-              })}
-            >
-              Finalizar bloco
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-primario"
+                disabled={finalizando || !resumo.trim()}
+                onClick={() => void finalizar()}
+              >
+                {finalizando ? "Finalizando…" : "Finalizar bloco"}
+              </button>
+              {!resumo.trim() ? <span className="text-sm text-muted">Escreva o resumo para finalizar.</span> : null}
+            </>
           )}
         </div>
       </section>
@@ -144,7 +216,7 @@ export function BlocoDetalhe({
           Você escreve as questões. Ao salvar, elas entram no banco de {materia.nome}.
         </p>
         {questoes.length >= MAX_QUESTOES ? (
-          <p className="mt-3 text-sm">Este bloco já tem 15 questões.</p>
+          <p className="mt-3 text-sm">Este bloco já tem {MAX_QUESTOES} questões.</p>
         ) : (
           <form onSubmit={criarQuestao} className="mt-4 grid gap-3">
             <div>
@@ -206,11 +278,18 @@ export function BlocoDetalhe({
                   {grifo.imagem ? <RecorteGrifo imagem={grifo.imagem} texto={grifo.texto} /> : null}
                   {grifo.texto}
                 </blockquote>
-                <Confirmar
-                  rotulo="Apagar grifo"
-                  confirmar="Apagar"
-                  onConfirmar={() => repo.grifos.remover(grifo.id)}
-                />
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {questoes.length < MAX_QUESTOES ? (
+                    <button type="button" className="btn" onClick={() => virarQuestao(grifo.texto)}>
+                      Virar questão
+                    </button>
+                  ) : null}
+                  <Confirmar
+                    rotulo="Apagar grifo"
+                    confirmar="Apagar"
+                    onConfirmar={() => repo.grifos.remover(grifo.id)}
+                  />
+                </div>
               </article>
             ))}
           </div>

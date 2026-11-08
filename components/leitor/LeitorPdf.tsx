@@ -2,15 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { gerarCloze } from "@/lib/cloze";
 import { mensagemErro, mensagemPdf } from "@/lib/erros";
 import { blocoDaPagina, descreverFaixa } from "@/lib/faixa";
 import { abrirDocumento, carregarPdfjs, escalaCss, medidaNitida, type DocumentoPdf } from "@/lib/pdf";
+import { gravarBruto, lerBruto, usePreferencia } from "@/lib/preferencias";
 import { normalizarRects } from "@/lib/rects";
 import { repo } from "@/lib/repo";
 import { caminhoBloco, caminhoMateria } from "@/lib/rotas";
 import { Caderno } from "../Caderno";
 import type { CorGrifo, Grifo, PostIt, Questao, Rect } from "@/lib/types";
 import { IMPORTANTE, MAX_QUESTOES, PRIORIDADES, nomeDaCor } from "@/lib/types";
+import { useTema } from "@/lib/tema";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "../ui";
 
@@ -144,11 +147,14 @@ export function LeitorPdf({
   materiaId,
   pdfId,
   paginaInicial,
+  paginaExplicita,
   marcaInicial,
 }: {
   materiaId: string;
   pdfId: string;
   paginaInicial: number;
+  /** A URL pediu uma página. Sem isso, o leitor volta para onde você parou. */
+  paginaExplicita: boolean;
   marcaInicial?: string | null;
 }) {
   const palcoRef = useRef<HTMLDivElement>(null);
@@ -163,6 +169,7 @@ export function LeitorPdf({
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
   const desfazerRef = useRef<() => void>(() => {});
   const grifosAtuais = useRef<Grifo[]>([]);
+  const paginaRestaurada = useRef(false);
 
   const [documento, setDocumento] = useState<DocumentoPdf | null>(null);
   const [erroLeitura, setErroLeitura] = useState<string | null>(null);
@@ -203,6 +210,9 @@ export function LeitorPdf({
   const [editandoQuestao, setEditandoQuestao] = useState<string | null>(null);
   const [foco, setFoco] = useState<FocoMarca | null>(null);
   const [marcaAplicada, setMarcaAplicada] = useState<string | null>(null);
+  const [inversao, definirInversao] = usePreferencia<"auto" | "sim" | "nao">("foco.pdfInvertido", "auto");
+  const tema = useTema();
+  const invertido = inversao === "sim" || (inversao === "auto" && tema === "escuro");
 
   if (paginaInicial !== origem) {
     setOrigem(paginaInicial);
@@ -253,15 +263,21 @@ export function LeitorPdf({
     }
   }
 
+  const [blocoVisto, setBlocoVisto] = useState(blocoIdAtual);
+  if (blocoVisto !== blocoIdAtual) {
+    setBlocoVisto(blocoIdAtual);
+    setEditandoQuestao(null);
+  }
   useEffect(() => {
     questoesDialogo.current?.close();
-    setEditandoQuestao(null);
   }, [blocoIdAtual]);
 
-  useEffect(() => {
+  const [paginaVista, setPaginaVista] = useState(paginaSegura);
+  if (paginaVista !== paginaSegura) {
+    setPaginaVista(paginaSegura);
     setColocandoPostit(false);
     setPostitAberto(null);
-  }, [paginaSegura]);
+  }
 
   useEffect(() => {
     if (!postitAberto) return;
@@ -283,6 +299,15 @@ export function LeitorPdf({
         }
         doc = aberto;
         docIdRef.current = arquivoId;
+        if (!paginaExplicita && !marcaInicial) {
+          const salva = Number(lerBruto("foco.pagina." + arquivoId));
+          if (Number.isInteger(salva) && salva > 1 && salva <= aberto.numPages) {
+            setPagina(salva);
+            setInicio(String(salva));
+            setFim(String(salva));
+          }
+        }
+        paginaRestaurada.current = true;
         setErroLeitura(null);
         setDocumento(aberto);
       } catch (falha) {
@@ -294,7 +319,14 @@ export function LeitorPdf({
       docIdRef.current = null;
       void doc?.loadingTask.destroy();
     };
+    // paginaExplicita e marcaInicial só importam na abertura do arquivo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arquivo?.id, arquivo?.blob]);
+
+  useEffect(() => {
+    if (!documento || !paginaRestaurada.current) return;
+    gravarBruto("foco.pagina." + pdfId, String(paginaSegura));
+  }, [documento, paginaSegura, pdfId]);
 
   useEffect(() => {
     const palco = palcoRef.current;
@@ -404,6 +436,20 @@ export function LeitorPdf({
         setTemTexto(camada.textContentItemsStr.some((item) => item.trim().length > 0));
         setPronta(true);
         setErro(null);
+        const seguinte = paginaSegura + 1;
+        if (seguinte <= documento.numPages) {
+          const aquecer = () => {
+            if (canceladoRender) return;
+            void documento
+              .getPage(seguinte)
+              .then((proxima) => proxima.getOperatorList())
+              .catch(() => {
+                /* o pré-carregamento é só uma ajuda */
+              });
+          };
+          if ("requestIdleCallback" in window) window.requestIdleCallback(aquecer, { timeout: 1500 });
+          else setTimeout(aquecer, 250);
+        }
       } catch (falha) {
         if (canceladoRender || cancelado(falha)) return;
         setErro(mensagemPdf(falha));
@@ -493,8 +539,40 @@ export function LeitorPdf({
     const caixaPalco = palco.getBoundingClientRect();
     const caixaFolha = folha.getBoundingClientRect();
     const delta = caixaFolha.top + foco.y * caixaFolha.height - caixaPalco.top - palco.clientHeight * 0.28;
-    if (Math.abs(delta) > 12) palco.scrollBy({ top: delta, behavior: "smooth" });
+    const semMovimento = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (Math.abs(delta) > 12) palco.scrollBy({ top: delta, behavior: semMovimento ? "auto" : "smooth" });
   }, [foco, pronta, medida, paginaSegura]);
+
+  function desfazerMarcacao() {
+    let alvo: { id: string; pagina: number } | undefined;
+    while (marcasParaDesfazer.current.length) {
+      const item = marcasParaDesfazer.current.pop();
+      if (item && grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
+        alvo = item;
+        break;
+      }
+    }
+    if (!alvo) {
+      setErro(null);
+      setAviso("Não há marcação para desfazer.");
+      return;
+    }
+    setPagina(alvo.pagina);
+    setCorMarca(null);
+    setTraco(null);
+    origemMarca.current = null;
+    void repo.grifos.remover(alvo.id).then(
+      () => {
+        setErro(null);
+        setAviso("Marcação desfeita.");
+      },
+      (falha) => setErro(mensagemErro(falha, "Não foi possível desfazer a marcação.")),
+    );
+  }
+
+  useEffect(() => {
+    desfazerRef.current = desfazerMarcacao;
+  });
 
   if (!arquivoPronto) return <Abrindo texto="Abrindo o PDF…" />;
   if (erroArquivo) return <div className="px-5 py-10"><Aviso texto={erroArquivo} /></div>;
@@ -541,33 +619,6 @@ export function LeitorPdf({
     setSelecao(null);
   }
 
-  function desfazerMarcacao() {
-    let alvo: { id: string; pagina: number } | undefined;
-    while (marcasParaDesfazer.current.length) {
-      const item = marcasParaDesfazer.current.pop();
-      if (item && grifosAtuais.current.some((grifo) => grifo.id === item.id)) {
-        alvo = item;
-        break;
-      }
-    }
-    if (!alvo) {
-      setErro(null);
-      setAviso("Não há marcação para desfazer.");
-      return;
-    }
-    setPagina(alvo.pagina);
-    setCorMarca(null);
-    setTraco(null);
-    origemMarca.current = null;
-    void repo.grifos.remover(alvo.id).then(
-      () => {
-        setErro(null);
-        setAviso("Marcação desfeita.");
-      },
-      (falha) => setErro(mensagemErro(falha, "Não foi possível desfazer a marcação.")),
-    );
-  }
-  desfazerRef.current = desfazerMarcacao;
 
   function escolherCor(cor: CorGrifo) {
     setColocandoPostit(false);
@@ -1005,6 +1056,15 @@ export function LeitorPdf({
               <button type="button" className="btn" onClick={() => void ajustar()}>
                 Ajustar
               </button>
+              <button
+                type="button"
+                className="btn"
+                aria-pressed={invertido}
+                title="Inverte as cores da página para ler no escuro"
+                onClick={() => definirInversao(invertido ? "nao" : "sim")}
+              >
+                Inverter
+              </button>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
@@ -1126,7 +1186,7 @@ export function LeitorPdf({
           {documento ? (
             <div
               ref={folhaRef}
-              className="folha"
+              className={invertido ? "folha folha-invertida" : "folha"}
               style={{
                 width: medidaAtual?.w,
                 height: medidaAtual?.h,
@@ -1309,7 +1369,7 @@ export function LeitorPdf({
           {blocoAtual ? (
             <>
               {questoesDoBloco.length >= MAX_QUESTOES ? (
-                <p className="mt-3 text-sm">Este bloco já tem 15 questões.</p>
+                <p className="mt-3 text-sm">Este bloco já tem {MAX_QUESTOES} questões.</p>
               ) : (
                 <form onSubmit={salvarQuestao} className="mt-3 grid gap-2">
                   <div>
@@ -1393,7 +1453,7 @@ export function LeitorPdf({
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {grifosDaPagina.map((grifo) => (
-                <li key={grifo.id} className="mt-2 flex items-start justify-between gap-3 rounded-xl bg-[#fbf8f4] px-3 py-2">
+                <li key={grifo.id} className="mt-2 flex items-start justify-between gap-3 rounded-xl bg-[var(--campo-bg)] px-3 py-2">
                   <button
                     type="button"
                     className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left text-inherit"
@@ -1412,16 +1472,35 @@ export function LeitorPdf({
                     </span>
                     <span className="recorte mt-1 text-sm">{grifo.texto}</span>
                   </button>
-                  <button
-                    type="button"
-                    className="btn-perigo mt-1"
-                    onClick={() => {
-                      marcasParaDesfazer.current = marcasParaDesfazer.current.filter((item) => item.id !== grifo.id);
-                      void repo.grifos.remover(grifo.id);
-                    }}
-                  >
-                    Apagar
-                  </button>
+                  <div className="mt-1 flex shrink-0 flex-col items-end gap-1">
+                    {blocoAtual && questoesDoBloco.length < MAX_QUESTOES ? (
+                      <button
+                        type="button"
+                        className="btn"
+                        title="Gera uma pergunta de lacuna a partir deste grifo"
+                        onClick={() => {
+                          const gerada = gerarCloze(grifo.texto);
+                          setEnunciado(gerada.enunciado);
+                          setResposta(gerada.resposta);
+                          const campo = document.getElementById("enunciado-leitor");
+                          campo?.scrollIntoView({ block: "center" });
+                          campo?.focus();
+                        }}
+                      >
+                        Virar questão
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn-perigo"
+                      onClick={() => {
+                        marcasParaDesfazer.current = marcasParaDesfazer.current.filter((item) => item.id !== grifo.id);
+                        void repo.grifos.remover(grifo.id);
+                      }}
+                    >
+                      Apagar
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1552,7 +1631,7 @@ export function LeitorPdf({
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {blocos.map((bloco) => (
-                <li key={bloco.id} className="flex items-start justify-between gap-2 rounded-xl bg-[#fbf8f4] px-3 py-2">
+                <li key={bloco.id} className="flex items-start justify-between gap-2 rounded-xl bg-[var(--campo-bg)] px-3 py-2">
                   <button type="button" className="min-w-0 text-left" onClick={() => setPagina(bloco.paginaInicio)}>
                     <span className="block font-medium">{bloco.titulo}</span>
                     <span className="text-sm text-muted">{descreverFaixa(bloco.paginaInicio, bloco.paginaFim)}</span>

@@ -2,7 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { deCampoData } from "@/lib/datas";
+import { coberturaDe, descreverProva } from "@/lib/edital";
 import { mensagemErro } from "@/lib/erros";
+import { porcentagem } from "@/lib/desempenho";
 import { repo } from "@/lib/repo";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
@@ -10,16 +13,27 @@ import { Abrindo, Aviso } from "./ui";
 export function EditaisHome() {
   const [nome, setNome] = useState("");
   const [orgao, setOrgao] = useState("");
+  const [dataProva, setDataProva] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const editais = await repo.editais.listar();
-    return Promise.all(
-      editais.map(async (edital) => ({
+    const [editais, vinculos, topicos, blocos] = await Promise.all([
+      repo.editais.listar(),
+      repo.editais.vinculos(),
+      repo.topicos.listarTodos(),
+      repo.blocos.listarTodos(),
+    ]);
+    const agora = Date.now();
+    return editais.map((edital) => {
+      const daProva = topicos.filter((topico) => topico.editalId === edital.id);
+      return {
         edital,
-        materias: (await repo.editais.materias(edital.id)).length,
-      })),
-    );
+        materias: vinculos.filter((vinculo) => vinculo.editalId === edital.id).length,
+        topicos: daProva.length,
+        cobertura: coberturaDe(daProva, blocos),
+        prova: descreverProva(edital.dataProva, agora),
+      };
+    });
   }, [], []);
 
   async function criar(evento: React.FormEvent) {
@@ -27,9 +41,10 @@ export function EditaisHome() {
     setGuardando(true);
     setErro(null);
     try {
-      await repo.editais.criar({ nome, orgao });
+      await repo.editais.criar({ nome, orgao, dataProva: deCampoData(dataProva) });
       setNome("");
       setOrgao("");
+      setDataProva("");
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível criar o edital."));
     } finally {
@@ -42,7 +57,8 @@ export function EditaisHome() {
       <p className="olho">Prova</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Editais</h1>
       <p className="mt-3 max-w-xl text-muted">
-        Um edital reúne as matérias que você está estudando para aquela prova. O PDF continua na matéria.
+        Um edital reúne as matérias e os tópicos daquela prova. Com a data, o app limita os intervalos de revisão para
+        que tudo volte antes do dia.
       </p>
       <form onSubmit={criar} className="mt-8 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
         <div>
@@ -71,6 +87,18 @@ export function EditaisHome() {
             autoComplete="off"
           />
         </div>
+        <div className="sm:col-span-2">
+          <label className="rotulo" htmlFor="data-edital">
+            Data da prova (opcional)
+          </label>
+          <input
+            id="data-edital"
+            className="campo"
+            type="date"
+            value={dataProva}
+            onChange={(evento) => setDataProva(evento.target.value)}
+          />
+        </div>
         <button className="btn btn-primario" type="submit" disabled={guardando}>
           {guardando ? "Criando…" : "Criar edital"}
         </button>
@@ -92,7 +120,19 @@ export function EditaisHome() {
                   {item.edital.orgao || "Órgão em branco"}
                   {" · "}
                   {item.materias} {item.materias === 1 ? "matéria" : "matérias"}
+                  {item.prova ? ` · ${item.prova}` : ""}
                 </span>
+                {item.cobertura.fracao !== null ? (
+                  <span className="mt-2 flex items-center gap-3 text-sm text-muted">
+                    <span className="h-2 w-40 max-w-[50%] overflow-hidden rounded-full bg-line" aria-hidden>
+                      <span
+                        className="block h-full rounded-full bg-pine-bg"
+                        style={{ width: `${porcentagem(item.cobertura.fracao)}%` }}
+                      />
+                    </span>
+                    {porcentagem(item.cobertura.fracao)}% coberto ({item.cobertura.cobertos}/{item.cobertura.total} tópicos)
+                  </span>
+                ) : null}
               </Link>
             </li>
           ))}

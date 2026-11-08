@@ -1,3 +1,4 @@
+import { chaveDia } from "./datas";
 import { getDb } from "./db";
 import { ErroEstudo } from "./erros";
 import { supabase } from "./supabase";
@@ -22,8 +23,20 @@ async function migrar() {
   if (typeof indexedDB === "undefined") return;
 
   const db = getDb();
-  const [materias, pdfs, blocos, grifos, postits, questoes, tentativas, editais, vinculos] =
-    await Promise.all([
+  const [
+    materias,
+    pdfs,
+    blocos,
+    grifos,
+    postits,
+    questoes,
+    tentativas,
+    editais,
+    vinculos,
+    topicos,
+    lancamentos,
+    estudos,
+  ] = await Promise.all([
       db.materias.toArray(),
       db.pdfs.toArray(),
       db.blocos.toArray(),
@@ -33,6 +46,9 @@ async function migrar() {
       db.tentativas.toArray(),
       db.editais.toArray(),
       db.editalMaterias.toArray(),
+      db.editalTopicos.toArray(),
+      db.lancamentos.toArray(),
+      db.estudos.toArray(),
     ]);
 
   const vazio =
@@ -44,7 +60,10 @@ async function migrar() {
       questoes.length +
       tentativas.length +
       editais.length +
-      vinculos.length ===
+      vinculos.length +
+      topicos.length +
+      lancamentos.length +
+      estudos.length ===
     0;
   if (vazio) {
     localStorage.setItem(MARCA, "1");
@@ -71,6 +90,7 @@ async function migrar() {
           id: edital.id,
           nome: edital.nome,
           orgao: edital.orgao,
+          data_prova: edital.dataProva ? chaveDia(edital.dataProva) : null,
           created_at: iso(edital.createdAt),
         })),
       ),
@@ -114,6 +134,9 @@ async function migrar() {
           pagina_inicio: bloco.paginaInicio,
           pagina_fim: bloco.paginaFim,
           status: bloco.status,
+          resumo: bloco.resumo ?? null,
+          proxima_revisao_em: bloco.proximaRevisaoEm ? iso(bloco.proximaRevisaoEm) : null,
+          revisoes: bloco.revisoes ?? null,
           created_at: iso(bloco.createdAt),
         })),
       ),
@@ -176,6 +199,8 @@ async function migrar() {
           resposta: questao.resposta,
           status_revisao: questao.statusRevisao,
           sequencia: questao.sequencia ?? 0,
+          facilidade: questao.facilidade ?? null,
+          intervalo_dias: questao.intervaloDias ?? null,
           proxima_em: questao.proximaEm ? iso(questao.proximaEm) : null,
           created_at: iso(questao.createdAt),
         })),
@@ -193,6 +218,9 @@ async function migrar() {
           materia_id: tentativa.materiaId,
           bloco_id: tentativa.blocoId,
           acertou: tentativa.acertou,
+          nota: tentativa.nota ?? null,
+          confianca: tentativa.confianca ?? null,
+          motivo: tentativa.motivo ?? null,
           em: iso(tentativa.em),
         })),
       ),
@@ -209,6 +237,51 @@ async function migrar() {
         })),
       ),
       "Não foi possível enviar os vínculos dos editais.",
+    );
+  }
+  if (topicos.length) {
+    await gravar(
+      cliente.from("edital_topicos").upsert(
+        topicos.map((topico) => ({
+          id: topico.id,
+          edital_id: topico.editalId,
+          materia_id: topico.materiaId,
+          nome: topico.nome,
+          peso: topico.peso,
+          bloco_id: topico.blocoId,
+          feito: topico.feito,
+          created_at: iso(topico.createdAt),
+        })),
+      ),
+      "Não foi possível enviar os tópicos dos editais.",
+    );
+  }
+  if (lancamentos.length) {
+    await gravar(
+      cliente.from("lancamentos").upsert(
+        lancamentos.map((lancamento) => ({
+          id: lancamento.id,
+          materia_id: lancamento.materiaId,
+          feitas: lancamento.feitas,
+          acertos: lancamento.acertos,
+          fonte: lancamento.fonte,
+          em: iso(lancamento.em),
+        })),
+      ),
+      "Não foi possível enviar os lançamentos.",
+    );
+  }
+  if (estudos.length) {
+    await gravar(
+      cliente.from("estudos").upsert(
+        estudos.map((estudo) => ({
+          id: estudo.id,
+          materia_id: estudo.materiaId,
+          segundos: estudo.segundos,
+          em: iso(estudo.em),
+        })),
+      ),
+      "Não foi possível enviar as sessões de estudo.",
     );
   }
 

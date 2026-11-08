@@ -2,22 +2,37 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { carregarCartoes, type Cartao } from "@/lib/cartoes";
+import { formatarData } from "@/lib/datas";
+import { diasAteProvaPorMateria } from "@/lib/edital";
 import { mensagemErro } from "@/lib/erros";
+import { gravarBruto, useBruto } from "@/lib/preferencias";
 import { repo } from "@/lib/repo";
-import { aplicarJulgamento, compararRevisao, descreverVolta, ehGargalo, limitarSimulado, proximaData, separarSimulado } from "@/lib/revisao";
+import {
+  calcularAgenda,
+  descreverVolta,
+  estaDevida,
+  gargalos,
+  limitarSimulado,
+  limiteDaProva,
+  notaDeAcerto,
+  proximaData,
+  separarSimulado,
+} from "@/lib/revisao";
 import { caminhoBloco } from "@/lib/rotas";
-import type { Materia, Questao, StatusRevisao, Tentativa } from "@/lib/types";
-import { STATUS_REVISAO } from "@/lib/types";
+import type { Confianca, Materia, MotivoErro, Tentativa } from "@/lib/types";
+import { CONFIANCAS, MOTIVOS_ERRO, STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
 
-type Cartao = Questao & {
-  materiaNome: string;
-  pdfNome: string;
-  blocoTitulo: string;
-  blocoId: string;
-};
+const CHAVE_SIMULADO = "foco.simulado";
+const VALIDADE_SIMULADO = 3 * 86_400_000;
+
+/** Relógio lido só em respostas a cliques, nunca durante a renderização. */
+function instante() {
+  return Date.now();
+}
 
 function embaralhar<T>(lista: T[]) {
   const copia = lista.slice();
@@ -30,34 +45,13 @@ function embaralhar<T>(lista: T[]) {
   return copia;
 }
 
-async function carregarCartoes(materiaIds: string[]) {
-  const listas = await Promise.all(materiaIds.map((id) => repo.questoes.listarPorMateria(id)));
-  const questoes = listas.flat();
-  const materias = await repo.materias.listar();
-  const blocos = await Promise.all(questoes.map((questao) => repo.blocos.obter(questao.blocoId)));
-  const pdfIds = [...new Set(questoes.map((questao) => questao.pdfId))];
-  const pdfs = await Promise.all(pdfIds.map((id) => repo.pdfs.obter(id)));
-  return questoes.flatMap((questao) => {
-    const bloco = blocos.find((item) => item?.id === questao.blocoId);
-    const pdf = pdfs.find((item) => item?.id === questao.pdfId);
-    const materia = materias.find((item) => item.id === questao.materiaId);
-    if (!bloco || !pdf || !materia) return [];
-    const cartao: Cartao = {
-      ...questao,
-      materiaNome: materia.nome,
-      pdfNome: pdf.nome,
-      blocoTitulo: bloco.titulo,
-      blocoId: bloco.id,
-    };
-    return [cartao];
-  });
-}
+type Modo = "simulado" | "questoes";
 
 export function Banco() {
   const parametros = useSearchParams();
   const router = useRouter();
   const materiaId = parametros.get("materia") ?? "";
-  const [modo, setModo] = useState<"revisao" | "simulado">("revisao");
+  const [modo, setModo] = useState<Modo>(materiaId ? "questoes" : "simulado");
   const { dados: materias, pronto: materiasProntas } = useConsulta(() => repo.materias.listar(), [], []);
 
   function escolher(id: string) {
@@ -66,20 +60,24 @@ export function Banco() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-10">
-      <p className="olho">Revisão</p>
+      <p className="olho">Questões</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Banco</h1>
       <p className="mt-3 max-w-xl text-muted">
-        As questões entram aqui quando você as salva num bloco. Revise uma a uma ou gere um simulado.
+        As questões entram aqui quando você as salva num bloco. A revisão do dia fica em{" "}
+        <Link href="/hoje" className="text-pine no-underline hover:underline">
+          Hoje
+        </Link>
+        . Aqui você monta um simulado ou confere a agenda de cada questão.
       </p>
       <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Modo do banco">
-        <button type="button" className="btn btn-seletor" aria-pressed={modo === "revisao"} onClick={() => setModo("revisao")}>
-          Revisão
-        </button>
         <button type="button" className="btn btn-seletor" aria-pressed={modo === "simulado"} onClick={() => setModo("simulado")}>
           Simulado
         </button>
+        <button type="button" className="btn btn-seletor" aria-pressed={modo === "questoes"} onClick={() => setModo("questoes")}>
+          Todas as questões
+        </button>
       </div>
-      {modo === "revisao" ? (
+      {modo === "questoes" ? (
         <>
           <div className="mt-6">
             <label className="rotulo" htmlFor="filtro-materia">
@@ -99,7 +97,7 @@ export function Banco() {
               ))}
             </select>
           </div>
-          <Baralho key={materiaId || "todas"} materiaId={materiaId} />
+          <Lista key={materiaId || "todas"} materiaId={materiaId} />
         </>
       ) : (
         <Simulado materias={materias} />
@@ -117,42 +115,25 @@ function AvisoGargalo() {
   );
 }
 
-function Baralho({ materiaId }: { materiaId: string }) {
-  const [indice, setIndice] = useState(0);
-  const [mostrar, setMostrar] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
-  const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const questoes = materiaId
-      ? await repo.questoes.listarPorMateria(materiaId)
-      : await repo.questoes.listarTodas();
-    const materias = await repo.materias.listar();
-    const blocos = await Promise.all(questoes.map((questao) => repo.blocos.obter(questao.blocoId)));
-    const pdfIds = [...new Set(questoes.map((questao) => questao.pdfId))];
-    const pdfs = await Promise.all(pdfIds.map((id) => repo.pdfs.obter(id)));
-    return questoes
-      .slice()
-      .sort(compararRevisao)
-      .map((questao) => {
-        const bloco = blocos.find((item) => item?.id === questao.blocoId);
-        const pdf = pdfs.find((item) => item?.id === questao.pdfId);
-        const materia = materias.find((item) => item.id === questao.materiaId);
-        if (!bloco || !pdf || !materia) return null;
-        const cartao: Cartao = {
-          ...questao,
-          materiaNome: materia.nome,
-          pdfNome: pdf.nome,
-          blocoTitulo: bloco.titulo,
-          blocoId: bloco.id,
-        };
-        return cartao;
-      })
-      .filter((cartao): cartao is Cartao => Boolean(cartao));
-  }, [materiaId], []);
-  const { dados: tentativas } = useConsulta(() => repo.tentativas.listar(), [], [] as Tentativa[]);
+function Lista({ materiaId }: { materiaId: string }) {
+  const [somenteVencidas, setSomenteVencidas] = useState(false);
+  const { dados, pronto, erro } = useConsulta(
+    async () => {
+      const [cartoes, tentativas] = await Promise.all([
+        carregarCartoes(materiaId ? { materiaIds: [materiaId] } : {}),
+        repo.tentativas.listar(),
+      ]);
+      const contagem = new Map<string, number>();
+      for (const item of tentativas) contagem.set(item.questaoId, (contagem.get(item.questaoId) ?? 0) + 1);
+      return { cartoes, contagem, agora: Date.now() };
+    },
+    [materiaId],
+    null,
+  );
 
   if (!pronto) return <Abrindo texto="Abrindo as questões…" />;
-  if (erroLeitura) return <div className="mt-6"><Aviso texto={erroLeitura} /></div>;
-  if (dados.length === 0) {
+  if (erro) return <div className="mt-6"><Aviso texto={erro} /></div>;
+  if (!dados || dados.cartoes.length === 0) {
     return (
       <p className="mt-8 text-muted">
         Nenhuma questão neste filtro. Elas aparecem aqui quando você salva uma questão num bloco.
@@ -160,83 +141,76 @@ function Baralho({ materiaId }: { materiaId: string }) {
     );
   }
 
-  const atual = dados[Math.min(indice, dados.length - 1)];
-
-  async function marcar(status: StatusRevisao) {
-    setErro(null);
-    try {
-      await repo.questoes.definirRevisao(atual.id, status);
-      setMostrar(false);
-    } catch (falha) {
-      setErro(mensagemErro(falha, "Não foi possível atualizar a revisão."));
-    }
-  }
+  const ordenadas = dados.cartoes
+    .filter((cartao) => !somenteVencidas || estaDevida(cartao, dados.agora))
+    .sort((a, b) => (a.proximaEm ?? 0) - (b.proximaEm ?? 0) || a.createdAt - b.createdAt);
 
   return (
-    <div className="mt-8">
-      {erro ? <div className="mb-4"><Aviso texto={erro} /></div> : null}
-      <p className="text-sm text-muted">
-        {Math.min(indice, dados.length - 1) + 1} de {dados.length}
+    <div className="mt-6">
+      <label className="flex items-center gap-3 text-sm">
+        <input type="checkbox" checked={somenteVencidas} onChange={(evento) => setSomenteVencidas(evento.target.checked)} />
+        Só as vencidas
+      </label>
+      <p className="mt-3 text-sm text-muted">
+        {ordenadas.length} de {dados.cartoes.length} {dados.cartoes.length === 1 ? "questão" : "questões"}, da mais atrasada
+        para a mais distante.
       </p>
-      <article className="mt-3 border border-line bg-sheet px-5 py-6" key={atual.id}>
-        <p className="text-sm text-muted">
-          {atual.materiaNome} · {atual.blocoTitulo}
-        </p>
-        <h2 className="mt-4 font-serif text-3xl leading-snug">{atual.enunciado}</h2>
-        {ehGargalo(tentativas, atual.id) ? <AvisoGargalo /> : null}
-        {mostrar ? (
-          <p className="mt-6 border-t border-line pt-4 font-serif text-xl leading-relaxed">{atual.resposta}</p>
-        ) : (
-          <button type="button" className="btn mt-6" onClick={() => setMostrar(true)}>
-            Mostrar resposta
-          </button>
-        )}
-        <div className="mt-6 flex flex-wrap gap-2">
-          {STATUS_REVISAO.map((status) => (
-            <button
-              key={status.id}
-              type="button"
-              className={`btn ${atual.statusRevisao === status.id ? "btn-primario" : ""}`}
-              aria-pressed={atual.statusRevisao === status.id}
-              onClick={() => void marcar(status.id)}
-            >
-              {status.nome}
-            </button>
-          ))}
-        </div>
-        <Link
-          href={caminhoBloco(atual.materiaId, atual.pdfId, atual.blocoId)}
-          className="mt-4 inline-block text-sm text-pine no-underline hover:underline"
-        >
-          Abrir bloco
-        </Link>
-      </article>
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            setIndice((atualIndice) => Math.max(0, atualIndice - 1));
-            setMostrar(false);
-          }}
-          disabled={indice <= 0}
-        >
-          Anterior
-        </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            setIndice((atualIndice) => Math.min(dados.length - 1, atualIndice + 1));
-            setMostrar(false);
-          }}
-          disabled={indice >= dados.length - 1}
-        >
-          Próxima
-        </button>
-      </div>
+      <ul className="mt-4 flex flex-col gap-3">
+        {ordenadas.map((cartao) => {
+          const vencida = estaDevida(cartao, dados.agora);
+          const status = STATUS_REVISAO.find((item) => item.id === cartao.statusRevisao)?.nome;
+          return (
+            <li key={cartao.id} className="cartao p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
+                <span>
+                  {cartao.materiaNome} · {cartao.blocoTitulo}
+                </span>
+                <span className={vencida ? "selo selo-alta" : "selo"}>
+                  {vencida ? "Vencida" : descreverVolta(cartao.proximaEm ?? 0, dados.agora)}
+                </span>
+              </div>
+              <p className="mt-2 whitespace-pre-wrap font-serif text-xl leading-snug">{cartao.enunciado}</p>
+              <p className="mt-2 text-sm text-muted">
+                {status} · {dados.contagem.get(cartao.id) ?? 0} {dados.contagem.get(cartao.id) === 1 ? "tentativa" : "tentativas"}
+                {cartao.intervaloDias ? ` · intervalo de ${cartao.intervaloDias} dias` : ""}
+              </p>
+              <Link
+                href={caminhoBloco(cartao.materiaId, cartao.pdfId, cartao.blocoId)}
+                className="mt-2 inline-block text-sm text-pine no-underline hover:underline"
+              >
+                Abrir bloco
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
+}
+
+type Julgamento = { acertou: boolean; texto: string; motivo?: MotivoErro };
+
+type SimuladoSalvo = {
+  salvoEm: number;
+  ids: string[];
+  rascunhos: Record<string, string>;
+  confiancas: Record<string, Confianca>;
+  indice: number;
+  encerrado: boolean;
+  julgamentos: Record<string, Julgamento>;
+  tentativas: Record<string, string>;
+};
+
+function lerSimuladoSalvo(bruto: string | null, agora: number): SimuladoSalvo | null {
+  if (!bruto) return null;
+  try {
+    const dado = JSON.parse(bruto) as SimuladoSalvo;
+    if (!Array.isArray(dado.ids) || !dado.ids.length) return null;
+    if (agora - dado.salvoEm > VALIDADE_SIMULADO) return null;
+    return dado;
+  } catch {
+    return null;
+  }
 }
 
 function Simulado({ materias }: { materias: Materia[] }) {
@@ -244,6 +218,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [prova, setProva] = useState<Cartao[] | null>(null);
   const [indice, setIndice] = useState(0);
   const [rascunhos, setRascunhos] = useState<Record<string, string>>({});
+  const [confiancas, setConfiancas] = useState<Record<string, Confianca>>({});
   const [encerrado, setEncerrado] = useState(false);
   const [gerando, setGerando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -251,14 +226,79 @@ function Simulado({ materias }: { materias: Materia[] }) {
   const [deFora, setDeFora] = useState(0);
   const [sobraram, setSobraram] = useState(0);
   const [pedido, setPedido] = useState<number | null>(null);
-  const [julgamentos, setJulgamentos] = useState<Record<string, { acertou: boolean; texto: string }>>({});
+  const [julgamentos, setJulgamentos] = useState<Record<string, Julgamento>>({});
   const [historico, setHistorico] = useState<Tentativa[]>([]);
   const tentativasDaProva = useRef<Record<string, string>>({});
+  const salvoBruto = useBruto(CHAVE_SIMULADO);
+  const [aberturaEm] = useState(() => Date.now());
+  const salvo = lerSimuladoSalvo(salvoBruto, aberturaEm);
   const ids = escolhidas ?? materias.map((materia) => materia.id);
   const todas = materias.length > 0 && materias.every((materia) => ids.includes(materia.id));
+  const { dados: diasProva } = useConsulta(
+    async () => {
+      const [editais, vinculos] = await Promise.all([repo.editais.listar(), repo.editais.vinculos()]);
+      return diasAteProvaPorMateria(editais, vinculos);
+    },
+    [],
+    new Map<string, number>(),
+  );
+  const emGargalo = useMemo(() => gargalos(historico), [historico]);
+
+  useEffect(() => {
+    if (!prova) return;
+    const estado: SimuladoSalvo = {
+      salvoEm: Date.now(),
+      ids: prova.map((questao) => questao.id),
+      rascunhos,
+      confiancas,
+      indice,
+      encerrado,
+      julgamentos,
+      tentativas: tentativasDaProva.current,
+    };
+    gravarBruto(CHAVE_SIMULADO, JSON.stringify(estado));
+  }, [prova, rascunhos, confiancas, indice, encerrado, julgamentos]);
 
   function alternar(id: string) {
     setEscolhidas(ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+  }
+
+  function esquecerSimulado() {
+    gravarBruto(CHAVE_SIMULADO, null);
+  }
+
+  async function retomar() {
+    if (!salvo) return;
+    setErro(null);
+    setGerando(true);
+    try {
+      const [cartoes, tentativas] = await Promise.all([carregarCartoes(), repo.tentativas.listar()]);
+      const porId = new Map(cartoes.map((cartao) => [cartao.id, cartao]));
+      const questoes = salvo.ids.flatMap((id) => {
+        const cartao = porId.get(id);
+        return cartao ? [cartao] : [];
+      });
+      if (!questoes.length) {
+        esquecerSimulado();
+        setErro("As questões desse simulado não existem mais.");
+        return;
+      }
+      tentativasDaProva.current = salvo.tentativas ?? {};
+      setHistorico(tentativas);
+      setDeFora(0);
+      setSobraram(0);
+      setPedido(null);
+      setRascunhos(salvo.rascunhos ?? {});
+      setConfiancas(salvo.confiancas ?? {});
+      setJulgamentos(salvo.julgamentos ?? {});
+      setIndice(Math.min(salvo.indice ?? 0, questoes.length - 1));
+      setEncerrado(Boolean(salvo.encerrado));
+      setProva(questoes);
+    } catch (falha) {
+      setErro(mensagemErro(falha, "Não foi possível retomar o simulado."));
+    } finally {
+      setGerando(false);
+    }
   }
 
   async function gerar() {
@@ -274,7 +314,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     }
     setGerando(true);
     try {
-      const [cartoes, tentativas] = await Promise.all([carregarCartoes(ids), repo.tentativas.listar()]);
+      const [cartoes, tentativas] = await Promise.all([carregarCartoes({ materiaIds: ids }), repo.tentativas.listar()]);
       if (!cartoes.length) {
         setErro("Nenhuma questão nessas matérias.");
         return;
@@ -282,9 +322,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
       const { entram, esperando } = separarSimulado(cartoes);
       if (!entram.length) {
         const quando = proximaData(esperando);
-        const data = quando
-          ? new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long" }).format(quando)
-          : "";
+        const data = quando ? formatarData(quando, { day: "numeric", month: "long" }) : "";
         setErro(
           data
             ? `Nada no banco para agora. As questões que você acertou voltam a partir de ${data}.`
@@ -302,6 +340,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
       setProva(embaralhar(selecionadas));
       setIndice(0);
       setRascunhos({});
+      setConfiancas({});
       setEncerrado(false);
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível gerar o simulado."));
@@ -310,11 +349,13 @@ function Simulado({ materias }: { materias: Materia[] }) {
     }
   }
 
-  async function julgar(questao: Cartao, acertou: boolean) {
+  async function julgar(questao: Cartao, acertou: boolean, motivo?: MotivoErro) {
     setErro(null);
-    const agenda = aplicarJulgamento(questao, acertou);
+    const nota = notaDeAcerto(acertou);
+    const agenda = calcularAgenda(questao, nota, { limiteDias: limiteDaProva(diasProva.get(questao.materiaId)) });
     const idTentativa = tentativasDaProva.current[questao.id] ?? crypto.randomUUID();
     tentativasDaProva.current[questao.id] = idTentativa;
+    const confianca = confiancas[questao.id];
     try {
       await repo.questoes.registrarJulgamento(questao.id, agenda, {
         id: idTentativa,
@@ -322,6 +363,9 @@ function Simulado({ materias }: { materias: Materia[] }) {
         materiaId: questao.materiaId,
         blocoId: questao.blocoId,
         acertou,
+        nota,
+        ...(confianca ? { confianca } : {}),
+        ...(!acertou && motivo ? { motivo } : {}),
       });
       const registrada: Tentativa = {
         id: idTentativa,
@@ -330,12 +374,15 @@ function Simulado({ materias }: { materias: Materia[] }) {
         materiaId: questao.materiaId,
         blocoId: questao.blocoId,
         acertou,
-        em: Date.now(),
+        nota,
+        ...(confianca ? { confianca } : {}),
+        ...(!acertou && motivo ? { motivo } : {}),
+        em: instante(),
       };
       setHistorico((atuais) => [...atuais.filter((item) => item.id !== idTentativa), registrada]);
       setJulgamentos((atuais) => ({
         ...atuais,
-        [questao.id]: { acertou, texto: descreverVolta(agenda.proximaEm) },
+        [questao.id]: { acertou, texto: descreverVolta(agenda.proximaEm), motivo: !acertou ? motivo : undefined },
       }));
     } catch (falha) {
       setErro(mensagemErro(falha, "Não foi possível guardar o resultado."));
@@ -352,10 +399,25 @@ function Simulado({ materias }: { materias: Materia[] }) {
         }}
       >
         {erro ? <div className="mb-4"><Aviso texto={erro} /></div> : null}
+        {salvo ? (
+          <div className="cartao mb-6 flex flex-wrap items-center justify-between gap-3 p-4">
+            <p className="text-sm">
+              Você tem um simulado em andamento, com {salvo.ids.length} {salvo.ids.length === 1 ? "questão" : "questões"}.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-primario" disabled={gerando} onClick={() => void retomar()}>
+                Retomar
+              </button>
+              <button type="button" className="btn" onClick={esquecerSimulado}>
+                Descartar
+              </button>
+            </div>
+          </div>
+        ) : null}
         <fieldset>
           <legend className="rotulo">Matérias do simulado</legend>
           <p className="mb-3 text-sm text-muted">
-            As vagas se dividem entre as matérias. Em cada uma, um quarto é erro, metade é questão nova e um quarto é dominada que já voltou. Se faltar alguma, a vaga passa adiante.
+            As vagas se dividem entre as matérias. Em cada uma, um quarto é erro, metade é questão em aprendizado e um quarto é dominada que já voltou. Se faltar alguma, a vaga passa adiante.
           </p>
           <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
             <input
@@ -402,50 +464,73 @@ function Simulado({ materias }: { materias: Materia[] }) {
 
   if (encerrado) {
     const respondidas = prova.filter((questao) => rascunhos[questao.id]?.trim()).length;
+    const julgadas = prova.filter((questao) => julgamentos[questao.id]).length;
     return (
       <div className="mt-6">
         <p className="text-sm text-muted">
-          {respondidas} de {prova.length} com resposta escrita. O acerto aumenta o intervalo. O erro devolve a questão ao próximo simulado.
+          {respondidas} de {prova.length} com resposta escrita, {julgadas} julgadas. O acerto aumenta o intervalo. O erro devolve a questão ao próximo simulado.
         </p>
         {erro ? <div className="mt-4"><Aviso texto={erro} /></div> : null}
         <ol className="mt-4 flex flex-col gap-3">
-          {prova.map((questao, posicao) => (
-            <li key={questao.id} className="cartao p-4">
-              <p className="text-sm text-muted">
-                {posicao + 1}. {questao.materiaNome} · {questao.blocoTitulo}
-              </p>
-              <h2 className="mt-2 font-serif text-2xl leading-snug">{questao.enunciado}</h2>
-              {ehGargalo(historico, questao.id) ? <AvisoGargalo /> : null}
-              <p className="mt-4 text-sm text-muted">Sua resposta</p>
-              <p className="mt-1">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
-              <p className="mt-4 text-sm text-muted">Gabarito</p>
-              <p className="mt-1 font-serif text-xl leading-relaxed">{questao.resposta}</p>
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="btn"
-                  aria-pressed={julgamentos[questao.id]?.acertou === true}
-                  onClick={() => void julgar(questao, true)}
-                >
-                  Acertei
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  aria-pressed={julgamentos[questao.id]?.acertou === false}
-                  onClick={() => void julgar(questao, false)}
-                >
-                  Errei
-                </button>
-                {julgamentos[questao.id] ? <span className="text-sm text-pine">{julgamentos[questao.id].texto}</span> : null}
-              </div>
-            </li>
-          ))}
+          {prova.map((questao, posicao) => {
+            const julgamento = julgamentos[questao.id];
+            return (
+              <li key={questao.id} className="cartao p-4">
+                <p className="text-sm text-muted">
+                  {posicao + 1}. {questao.materiaNome} · {questao.blocoTitulo}
+                </p>
+                <h2 className="mt-2 whitespace-pre-wrap font-serif text-2xl leading-snug">{questao.enunciado}</h2>
+                {emGargalo.has(questao.id) ? <AvisoGargalo /> : null}
+                <p className="mt-4 text-sm text-muted">Sua resposta</p>
+                <p className="mt-1 whitespace-pre-wrap">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
+                <p className="mt-4 text-sm text-muted">Gabarito</p>
+                <p className="mt-1 whitespace-pre-wrap font-serif text-xl leading-relaxed">{questao.resposta}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-pressed={julgamento?.acertou === true}
+                    onClick={() => void julgar(questao, true)}
+                  >
+                    Acertei
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    aria-pressed={julgamento?.acertou === false}
+                    onClick={() => void julgar(questao, false, julgamento?.motivo)}
+                  >
+                    Errei
+                  </button>
+                  {julgamento ? <span className="text-sm text-pine">{julgamento.texto}</span> : null}
+                </div>
+                {julgamento && !julgamento.acertou ? (
+                  <div className="mt-3">
+                    <p className="text-sm text-muted">Por que errou?</p>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {MOTIVOS_ERRO.map((motivo) => (
+                        <button
+                          key={motivo.id}
+                          type="button"
+                          className="btn btn-cor"
+                          aria-pressed={julgamento.motivo === motivo.id}
+                          onClick={() => void julgar(questao, false, motivo.id)}
+                        >
+                          {motivo.nome}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
         <button
           type="button"
           className="btn mt-4"
           onClick={() => {
+            esquecerSimulado();
             setProva(null);
             setEncerrado(false);
             setErro(null);
@@ -471,8 +556,8 @@ function Simulado({ materias }: { materias: Materia[] }) {
         <p className="text-sm text-muted">
           {atual.materiaNome} · {atual.blocoTitulo}
         </p>
-        <h2 className="mt-4 font-serif text-3xl leading-snug">{atual.enunciado}</h2>
-        {ehGargalo(historico, atual.id) ? <AvisoGargalo /> : null}
+        <h2 className="mt-4 whitespace-pre-wrap font-serif text-3xl leading-snug">{atual.enunciado}</h2>
+        {emGargalo.has(atual.id) ? <AvisoGargalo /> : null}
         <label className="rotulo mt-6" htmlFor="resposta-simulado">
           Sua resposta
         </label>
@@ -483,6 +568,29 @@ function Simulado({ materias }: { materias: Materia[] }) {
           onChange={(evento) => setRascunhos((atuais) => ({ ...atuais, [atual.id]: evento.target.value }))}
           placeholder="Escreva a resposta sem consultar o gabarito."
         />
+        <fieldset className="mt-4">
+          <legend className="rotulo">Quanta certeza você tem?</legend>
+          <div className="flex flex-wrap gap-2">
+            {CONFIANCAS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="btn btn-cor"
+                aria-pressed={confiancas[atual.id] === item.id}
+                onClick={() =>
+                  setConfiancas((atuais) => {
+                    const proximas = { ...atuais };
+                    if (proximas[atual.id] === item.id) delete proximas[atual.id];
+                    else proximas[atual.id] = item.id;
+                    return proximas;
+                  })
+                }
+              >
+                {item.nome}
+              </button>
+            ))}
+          </div>
+        </fieldset>
       </article>
       <div className="mt-4 flex flex-wrap gap-2">
         <button

@@ -13,23 +13,26 @@ export function MateriasHome() {
   const [erro, setErro] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const materias = await repo.materias.listar();
-    return Promise.all(
-      materias.map(async (materia) => {
-        const [pdfs, questoes, editais] = await Promise.all([
-          repo.pdfs.listarPorMateria(materia.id),
-          repo.questoes.listarPorMateria(materia.id),
-          repo.editais.daMateria(materia.id),
-        ]);
-        return {
-          materia,
-          pdfs: pdfs.length,
-          questoes: questoes.length,
-          editais: editais.length,
-        };
-      }),
-    );
+    const [materias, pdfs, questoes, vinculos] = await Promise.all([
+      repo.materias.listar(),
+      repo.pdfs.listarTodos(),
+      repo.questoes.contarPorMateria(),
+      repo.editais.vinculos(),
+    ]);
+    const pdfsPorMateria = new Map<string, number>();
+    for (const pdf of pdfs) pdfsPorMateria.set(pdf.materiaId, (pdfsPorMateria.get(pdf.materiaId) ?? 0) + 1);
+    const editaisPorMateria = new Map<string, number>();
+    for (const vinculo of vinculos) {
+      editaisPorMateria.set(vinculo.materiaId, (editaisPorMateria.get(vinculo.materiaId) ?? 0) + 1);
+    }
+    return materias.map((materia) => ({
+      materia,
+      pdfs: pdfsPorMateria.get(materia.id) ?? 0,
+      questoes: questoes[materia.id] ?? 0,
+      editais: editaisPorMateria.get(materia.id) ?? 0,
+    }));
   }, [], []);
+  const { dados: vencidas } = useConsulta(() => repo.questoes.contarVencidas(), [], 0);
 
   async function criar(evento: React.FormEvent) {
     evento.preventDefault();
@@ -52,6 +55,18 @@ export function MateriasHome() {
       <p className="mt-3 max-w-xl text-muted">
         Cada matéria guarda os PDFs, os blocos de páginas e as questões daquele assunto.
       </p>
+
+      {vencidas > 0 ? (
+        <Link
+          href="/hoje"
+          className="cartao mt-6 flex flex-wrap items-center justify-between gap-3 px-4 py-3 no-underline hover:bg-sheet"
+        >
+          <span className="text-ink">
+            {vencidas} {vencidas === 1 ? "questão vencida" : "questões vencidas"} para revisar hoje
+          </span>
+          <span className="btn btn-primario">Começar</span>
+        </Link>
+      ) : null}
 
       <form onSubmit={criar} className="mt-8 flex flex-col gap-3 sm:flex-row">
         <div className="flex-1">

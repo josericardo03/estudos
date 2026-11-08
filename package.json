@@ -6,6 +6,7 @@
     "predev": "node scripts/copiar-worker.mjs",
     "prebuild": "node scripts/copiar-worker.mjs",
     "dev": "next dev",
+    "dev:local": "node scripts/dev-local.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

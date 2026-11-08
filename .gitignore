@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# copiado de node_modules pelo predev/prebuild
+/public/pdf.worker.min.mjs

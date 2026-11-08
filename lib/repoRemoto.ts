@@ -1,3 +1,4 @@
+import { chaveDia, dataDaChave, somarDias } from "./datas";
 import { ErroEstudo } from "./erros";
 import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
 import { garantirMigracao } from "./migrar";
@@ -5,10 +6,17 @@ import { avisarMudanca } from "./mudancas";
 import { supabase } from "./supabase";
 import type {
   Bloco,
+  Confianca,
   CorGrifo,
   Edital,
+  EditalMateria,
+  EditalTopico,
+  Estudo,
   Grifo,
+  Lancamento,
   Materia,
+  MotivoErro,
+  Nota,
   PdfDoc,
   PostIt,
   Questao,
@@ -35,6 +43,9 @@ type LinhaBloco = {
   pagina_inicio: number;
   pagina_fim: number;
   status: StatusBloco;
+  resumo: string | null;
+  proxima_revisao_em: string | null;
+  revisoes: number | null;
   created_at: string;
 };
 type LinhaGrifo = {
@@ -67,6 +78,8 @@ type LinhaQuestao = {
   resposta: string;
   status_revisao: StatusRevisao;
   sequencia: number;
+  facilidade: number | null;
+  intervalo_dias: number | null;
   proxima_em: string | null;
   created_at: string;
 };
@@ -77,13 +90,113 @@ type LinhaTentativa = {
   materia_id: string;
   bloco_id: string;
   acertou: boolean;
+  nota: number | null;
+  confianca: number | null;
+  motivo: string | null;
   em: string;
 };
-type LinhaEdital = { id: string; nome: string; orgao: string; created_at: string };
+type LinhaEdital = { id: string; nome: string; orgao: string; data_prova: string | null; created_at: string };
 type LinhaVinculo = { id: string; edital_id: string; materia_id: string };
+type LinhaTopico = {
+  id: string;
+  edital_id: string;
+  materia_id: string | null;
+  nome: string;
+  peso: number;
+  bloco_id: string | null;
+  feito: boolean;
+  created_at: string;
+};
+type LinhaLancamento = {
+  id: string;
+  materia_id: string;
+  feitas: number;
+  acertos: number;
+  fonte: string;
+  em: string;
+};
+type LinhaEstudo = { id: string; materia_id: string | null; segundos: number; em: string };
 
 const cachePdf = new Map<string, Blob>();
 const cacheMarca = new Map<string, Blob>();
+const PDFS_NA_MEMORIA = 3;
+const NOME_CACHE_PDF = "foco-pdfs-v1";
+const LIMITE_CACHE_PDF = 600 * 1024 * 1024;
+
+/** Guarda só os PDFs mais recentes na memória. O resto fica no Cache Storage. */
+function lembrarPdf(caminho: string, blob: Blob) {
+  cachePdf.delete(caminho);
+  cachePdf.set(caminho, blob);
+  while (cachePdf.size > PDFS_NA_MEMORIA) {
+    const maisAntigo = cachePdf.keys().next().value;
+    if (maisAntigo === undefined) break;
+    cachePdf.delete(maisAntigo);
+  }
+}
+
+async function cacheDePdfs() {
+  if (typeof caches === "undefined") return null;
+  try {
+    return await caches.open(NOME_CACHE_PDF);
+  } catch {
+    return null;
+  }
+}
+
+function enderecoDoCache(caminho: string) {
+  return new Request(`/__foco-cache/pdfs/${encodeURIComponent(caminho)}`);
+}
+
+async function lerPdfDoCache(caminho: string) {
+  const cache = await cacheDePdfs();
+  if (!cache) return null;
+  try {
+    const resposta = await cache.match(enderecoDoCache(caminho));
+    return resposta ? await resposta.blob() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function guardarPdfNoCache(caminho: string, blob: Blob) {
+  const cache = await cacheDePdfs();
+  if (!cache) return;
+  try {
+    const chaves = await cache.keys();
+    let total = blob.size;
+    const tamanhos: { chave: Request; tamanho: number }[] = [];
+    for (const chave of chaves) {
+      const guardada = await cache.match(chave);
+      const tamanho = guardada ? Number(guardada.headers.get("content-length") ?? 0) : 0;
+      tamanhos.push({ chave, tamanho });
+      total += tamanho;
+    }
+    // Os mais antigos entram primeiro em keys(): saem primeiro.
+    for (const item of tamanhos) {
+      if (total <= LIMITE_CACHE_PDF) break;
+      await cache.delete(item.chave);
+      total -= item.tamanho;
+    }
+    await cache.put(
+      enderecoDoCache(caminho),
+      new Response(blob, {
+        headers: { "content-type": "application/pdf", "content-length": String(blob.size) },
+      }),
+    );
+  } catch {
+    /* sem espaço ou sem permissão: o PDF continua vindo do servidor */
+  }
+}
+
+async function tirarPdfDoCache(caminho: string) {
+  const cache = await cacheDePdfs();
+  if (!cache) return;
+  try {
+    await cache.delete(enderecoDoCache(caminho));
+  } catch {
+    /* nada a fazer */
+  }
+}
 
 function novoId() {
   return crypto.randomUUID();
@@ -150,6 +263,7 @@ function pdfDe(linha: LinhaPdf, blob?: Blob): PdfDoc {
 }
 
 function blocoDe(linha: LinhaBloco): Bloco {
+  const proximaRevisaoEm = epoca(linha.proxima_revisao_em);
   return {
     id: linha.id,
     pdfId: linha.pdf_id,
@@ -157,6 +271,9 @@ function blocoDe(linha: LinhaBloco): Bloco {
     paginaInicio: linha.pagina_inicio,
     paginaFim: linha.pagina_fim,
     status: linha.status,
+    ...(linha.resumo ? { resumo: linha.resumo } : {}),
+    ...(proximaRevisaoEm != null ? { proximaRevisaoEm } : {}),
+    ...(linha.revisoes != null ? { revisoes: linha.revisoes } : {}),
     createdAt: epocaObrigatoria(linha.created_at),
   };
 }
@@ -199,6 +316,8 @@ function questaoDe(linha: LinhaQuestao): Questao {
     resposta: linha.resposta,
     statusRevisao: linha.status_revisao,
     sequencia: linha.sequencia ?? 0,
+    ...(linha.facilidade != null ? { facilidade: linha.facilidade } : {}),
+    ...(linha.intervalo_dias != null ? { intervaloDias: linha.intervalo_dias } : {}),
     ...(proximaEm != null ? { proximaEm } : {}),
     createdAt: epocaObrigatoria(linha.created_at),
   };
@@ -213,6 +332,9 @@ function tentativaDe(linha: LinhaTentativa): Tentativa {
     blocoId: linha.bloco_id,
     acertou: linha.acertou,
     em: epocaObrigatoria(linha.em),
+    ...(linha.nota != null ? { nota: linha.nota as Nota } : {}),
+    ...(linha.confianca != null ? { confianca: linha.confianca as Confianca } : {}),
+    ...(linha.motivo ? { motivo: linha.motivo as MotivoErro } : {}),
   };
 }
 
@@ -221,17 +343,83 @@ function editalDe(linha: LinhaEdital): Edital {
     id: linha.id,
     nome: linha.nome,
     orgao: linha.orgao,
+    dataProva: linha.data_prova ? dataDaChave(linha.data_prova.slice(0, 10)) : null,
     createdAt: epocaObrigatoria(linha.created_at),
   };
 }
 
+function vinculoDe(linha: LinhaVinculo): EditalMateria {
+  return { id: linha.id, editalId: linha.edital_id, materiaId: linha.materia_id };
+}
+
+function topicoDe(linha: LinhaTopico): EditalTopico {
+  return {
+    id: linha.id,
+    editalId: linha.edital_id,
+    materiaId: linha.materia_id,
+    nome: linha.nome,
+    peso: linha.peso,
+    blocoId: linha.bloco_id,
+    feito: linha.feito,
+    createdAt: epocaObrigatoria(linha.created_at),
+  };
+}
+
+function lancamentoDe(linha: LinhaLancamento): Lancamento {
+  return {
+    id: linha.id,
+    materiaId: linha.materia_id,
+    feitas: linha.feitas,
+    acertos: linha.acertos,
+    fonte: linha.fonte,
+    em: epocaObrigatoria(linha.em),
+  };
+}
+
+function estudoDe(linha: LinhaEstudo): Estudo {
+  return {
+    id: linha.id,
+    materiaId: linha.materia_id,
+    segundos: linha.segundos,
+    em: epocaObrigatoria(linha.em),
+  };
+}
+
+function limitarPeso(peso: number) {
+  if (!Number.isFinite(peso)) return 3;
+  return Math.min(5, Math.max(1, Math.round(peso)));
+}
+
+function validarLancamento(feitas: number, acertos: number) {
+  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
+    throw new ErroEstudo("Use números inteiros.");
+  }
+  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
+  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
+}
+
 async function baixar(bucket: "pdfs" | "marcas", caminho: string, cache: Map<string, Blob>, fallback: string) {
   const guardado = cache.get(caminho);
-  if (guardado) return guardado;
+  if (guardado) {
+    if (bucket === "pdfs") lembrarPdf(caminho, guardado);
+    return guardado;
+  }
+  if (bucket === "pdfs") {
+    const emDisco = await lerPdfDoCache(caminho);
+    if (emDisco && emDisco.size > 0) {
+      lembrarPdf(caminho, emDisco);
+      return emDisco;
+    }
+  }
   const { data, error } = await supabase().storage.from(bucket).download(caminho);
   checar(error, fallback);
   if (!data) throw new ErroEstudo(fallback);
-  cache.set(caminho, data);
+  if (bucket === "pdfs") {
+    lembrarPdf(caminho, data);
+    void guardarPdfNoCache(caminho, data);
+  } else {
+    cache.set(caminho, data);
+  }
   return data;
 }
 
@@ -342,7 +530,10 @@ export const repoRemoto = {
         const caminhos = linhas.map((pdf) => pdf.storage_path);
         const { error } = await supabase().storage.from("pdfs").remove(caminhos);
         checar(error, "Não foi possível excluir a matéria.");
-        for (const caminho of caminhos) cachePdf.delete(caminho);
+        for (const caminho of caminhos) {
+          cachePdf.delete(caminho);
+          void tirarPdfDoCache(caminho);
+        }
       }
       const { error } = await supabase().from("materias").delete().eq("id", idMateria);
       checar(error, "Não foi possível excluir a matéria.");
@@ -408,7 +599,8 @@ export const repoRemoto = {
         await supabase().storage.from("pdfs").remove([caminho]);
         checar(error, "Não foi possível guardar o PDF.");
       }
-      cachePdf.set(caminho, entrada.blob);
+      lembrarPdf(caminho, entrada.blob);
+      void guardarPdfNoCache(caminho, entrada.blob);
       avisarMudanca();
       return pdf;
     },
@@ -439,6 +631,7 @@ export const repoRemoto = {
         const { error } = await supabase().storage.from("pdfs").remove([caminho]);
         checar(error, "Não foi possível excluir o PDF.");
         cachePdf.delete(caminho);
+        void tirarPdfDoCache(caminho);
       }
       const { error } = await supabase().from("pdfs").delete().eq("id", pdfId);
       checar(error, "Não foi possível excluir o PDF.");
@@ -538,6 +731,45 @@ export const repoRemoto = {
         .eq("id", blocoId)
         .select("id");
       checar(error, "Não foi possível atualizar o bloco.");
+      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
+      avisarMudanca();
+    },
+    async salvarResumo(blocoId: string, resumo: string) {
+      await garantirMigracao();
+      const { data, error } = await supabase()
+        .from("blocos")
+        .update({ resumo: resumo.trim() })
+        .eq("id", blocoId)
+        .select("id");
+      checar(error, "Não foi possível guardar o resumo.");
+      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
+      avisarMudanca();
+    },
+    async finalizar(blocoId: string, resumo: string) {
+      await garantirMigracao();
+      const limpo = exigirNome(resumo, "Resuma o bloco com as suas palavras antes de finalizar.");
+      const { data, error } = await supabase()
+        .from("blocos")
+        .update({
+          status: "finalizado",
+          resumo: limpo,
+          revisoes: 0,
+          proxima_revisao_em: iso(somarDias(Date.now(), 1)),
+        })
+        .eq("id", blocoId)
+        .select("id");
+      checar(error, "Não foi possível finalizar o bloco.");
+      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
+      avisarMudanca();
+    },
+    async registrarRevisao(blocoId: string, entrada: { revisoes: number; proximaRevisaoEm: number }) {
+      await garantirMigracao();
+      const { data, error } = await supabase()
+        .from("blocos")
+        .update({ revisoes: entrada.revisoes, proxima_revisao_em: iso(entrada.proximaRevisaoEm) })
+        .eq("id", blocoId)
+        .select("id");
+      checar(error, "Não foi possível registrar a revisão.");
       if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
       avisarMudanca();
     },
@@ -743,6 +975,25 @@ export const repoRemoto = {
       checar(error, "Não foi possível ler as questões.");
       return ((data ?? []) as LinhaQuestao[]).map(questaoDe).sort((a, b) => a.createdAt - b.createdAt);
     },
+    async contarPorMateria(): Promise<Record<string, number>> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("questoes").select("materia_id");
+      checar(error, "Não foi possível contar as questões.");
+      const contagem: Record<string, number> = {};
+      for (const linha of (data ?? []) as { materia_id: string }[]) {
+        contagem[linha.materia_id] = (contagem[linha.materia_id] ?? 0) + 1;
+      }
+      return contagem;
+    },
+    async contarVencidas(agora = Date.now()): Promise<number> {
+      await garantirMigracao();
+      const { count, error } = await supabase()
+        .from("questoes")
+        .select("id", { count: "exact", head: true })
+        .or(`proxima_em.is.null,proxima_em.lte.${iso(agora)}`);
+      checar(error, "Não foi possível contar as questões vencidas.");
+      return count ?? 0;
+    },
     async criar(entrada: { blocoId: string; materiaId: string; enunciado: string; resposta: string }) {
       await garantirMigracao();
       const enunciado = exigirNome(entrada.enunciado, "Escreva o enunciado.");
@@ -758,7 +1009,7 @@ export const repoRemoto = {
         .select("id", { count: "exact", head: true })
         .eq("bloco_id", bloco.id);
       checar(erroContagem, "Não foi possível guardar a questão.");
-      if ((count ?? 0) >= MAX_QUESTOES) throw new ErroEstudo("Este bloco já tem 15 questões.");
+      if ((count ?? 0) >= MAX_QUESTOES) throw new ErroEstudo(`Este bloco já tem ${MAX_QUESTOES} questões.`);
       const questao: Questao = {
         id: novoId(),
         blocoId: bloco.id,
@@ -768,6 +1019,8 @@ export const repoRemoto = {
         resposta,
         statusRevisao: "nova",
         sequencia: 0,
+        facilidade: 2.5,
+        intervaloDias: 0,
         proximaEm: Date.now(),
         createdAt: Date.now(),
       };
@@ -780,6 +1033,8 @@ export const repoRemoto = {
         resposta: questao.resposta,
         status_revisao: questao.statusRevisao,
         sequencia: 0,
+        facilidade: 2.5,
+        intervalo_dias: 0,
         proxima_em: iso(questao.proximaEm ?? Date.now()),
         created_at: iso(questao.createdAt),
       });
@@ -800,20 +1055,15 @@ export const repoRemoto = {
       if (!data?.length) throw new ErroEstudo("Questão não encontrada.");
       avisarMudanca();
     },
-    async definirRevisao(questaoId: string, statusRevisao: StatusRevisao) {
-      await garantirMigracao();
-      const { data, error } = await supabase()
-        .from("questoes")
-        .update({ status_revisao: statusRevisao })
-        .eq("id", questaoId)
-        .select("id");
-      checar(error, "Não foi possível atualizar a revisão.");
-      if (!data?.length) throw new ErroEstudo("Questão não encontrada.");
-      avisarMudanca();
-    },
     async registrarJulgamento(
       questaoId: string,
-      entrada: { sequencia: number; proximaEm: number; statusRevisao: StatusRevisao },
+      entrada: {
+        sequencia: number;
+        proximaEm: number;
+        statusRevisao: StatusRevisao;
+        facilidade: number;
+        intervaloDias: number;
+      },
       tentativa: Omit<Tentativa, "questaoId" | "em">,
     ) {
       await garantirMigracao();
@@ -821,6 +1071,8 @@ export const repoRemoto = {
         .from("questoes")
         .update({
           sequencia: entrada.sequencia,
+          facilidade: entrada.facilidade,
+          intervalo_dias: entrada.intervaloDias,
           proxima_em: iso(entrada.proximaEm),
           status_revisao: entrada.statusRevisao,
         })
@@ -835,6 +1087,9 @@ export const repoRemoto = {
         materia_id: tentativa.materiaId,
         bloco_id: tentativa.blocoId,
         acertou: tentativa.acertou,
+        nota: tentativa.nota ?? null,
+        confianca: tentativa.confianca ?? null,
+        motivo: tentativa.motivo ?? null,
         em: iso(Date.now()),
       });
       checar(erroTentativa, "Não foi possível guardar o resultado.");
@@ -870,31 +1125,34 @@ export const repoRemoto = {
       checar(error, "Não foi possível ler o edital.");
       return data ? editalDe(data as LinhaEdital) : null;
     },
-    async criar(entrada: { nome: string; orgao: string }) {
+    async criar(entrada: { nome: string; orgao: string; dataProva?: number | null }) {
       await garantirMigracao();
       const edital: Edital = {
         id: novoId(),
         nome: exigirNome(entrada.nome, "Dê um nome ao edital."),
         orgao: entrada.orgao.trim(),
+        dataProva: entrada.dataProva ?? null,
         createdAt: Date.now(),
       };
       const { error } = await supabase().from("editais").insert({
         id: edital.id,
         nome: edital.nome,
         orgao: edital.orgao,
+        data_prova: edital.dataProva ? chaveDia(edital.dataProva) : null,
         created_at: iso(edital.createdAt),
       });
       checar(error, "Não foi possível criar o edital.");
       avisarMudanca();
       return edital;
     },
-    async atualizar(editalId: string, entrada: { nome: string; orgao: string }) {
+    async atualizar(editalId: string, entrada: { nome: string; orgao: string; dataProva?: number | null }) {
       await garantirMigracao();
       const { data, error } = await supabase()
         .from("editais")
         .update({
           nome: exigirNome(entrada.nome, "Dê um nome ao edital."),
           orgao: entrada.orgao.trim(),
+          data_prova: entrada.dataProva ? chaveDia(entrada.dataProva) : null,
         })
         .eq("id", editalId)
         .select("id");
@@ -907,6 +1165,12 @@ export const repoRemoto = {
       const { error } = await supabase().from("editais").delete().eq("id", editalId);
       checar(error, "Não foi possível excluir o edital.");
       avisarMudanca();
+    },
+    async vinculos(): Promise<EditalMateria[]> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("edital_materias").select("*");
+      checar(error, "Não foi possível ler os vínculos dos editais.");
+      return ((data ?? []) as LinhaVinculo[]).map(vinculoDe);
     },
     async materias(editalId: string): Promise<string[]> {
       await garantirMigracao();
@@ -958,6 +1222,150 @@ export const repoRemoto = {
           );
         checar(error, "Não foi possível atualizar as matérias do edital.");
       }
+      avisarMudanca();
+    },
+  },
+
+  topicos: {
+    async listarTodos(): Promise<EditalTopico[]> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("edital_topicos").select("*");
+      checar(error, "Não foi possível ler os tópicos.");
+      return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async listarPorEdital(editalId: string): Promise<EditalTopico[]> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("edital_topicos").select("*").eq("edital_id", editalId);
+      checar(error, "Não foi possível ler os tópicos.");
+      return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async criar(entrada: { editalId: string; materiaId: string | null; nome: string; peso: number }) {
+      await garantirMigracao();
+      const edital = await repoRemoto.editais.obter(entrada.editalId);
+      if (!edital) throw new ErroEstudo("Edital não encontrado.");
+      const topico: EditalTopico = {
+        id: novoId(),
+        editalId: edital.id,
+        materiaId: entrada.materiaId,
+        nome: exigirNome(entrada.nome, "Dê um nome ao tópico."),
+        peso: limitarPeso(entrada.peso),
+        blocoId: null,
+        feito: false,
+        createdAt: Date.now(),
+      };
+      const { error } = await supabase().from("edital_topicos").insert({
+        id: topico.id,
+        edital_id: topico.editalId,
+        materia_id: topico.materiaId,
+        nome: topico.nome,
+        peso: topico.peso,
+        bloco_id: null,
+        feito: false,
+        created_at: iso(topico.createdAt),
+      });
+      checar(error, "Não foi possível guardar o tópico.");
+      avisarMudanca();
+      return topico;
+    },
+    async atualizar(
+      topicoId: string,
+      entrada: Partial<Pick<EditalTopico, "nome" | "peso" | "materiaId" | "blocoId" | "feito">>,
+    ) {
+      await garantirMigracao();
+      const mudanca: Record<string, unknown> = {};
+      if (entrada.nome !== undefined) mudanca.nome = exigirNome(entrada.nome, "Dê um nome ao tópico.");
+      if (entrada.peso !== undefined) mudanca.peso = limitarPeso(entrada.peso);
+      if (entrada.materiaId !== undefined) mudanca.materia_id = entrada.materiaId;
+      if (entrada.blocoId !== undefined) mudanca.bloco_id = entrada.blocoId;
+      if (entrada.feito !== undefined) mudanca.feito = entrada.feito;
+      const { data, error } = await supabase()
+        .from("edital_topicos")
+        .update(mudanca)
+        .eq("id", topicoId)
+        .select("id");
+      checar(error, "Não foi possível atualizar o tópico.");
+      if (!data?.length) throw new ErroEstudo("Tópico não encontrado.");
+      avisarMudanca();
+    },
+    async remover(topicoId: string) {
+      await garantirMigracao();
+      const { error } = await supabase().from("edital_topicos").delete().eq("id", topicoId);
+      checar(error, "Não foi possível excluir o tópico.");
+      avisarMudanca();
+    },
+  },
+
+  lancamentos: {
+    async listar(): Promise<Lancamento[]> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("lancamentos").select("*");
+      checar(error, "Não foi possível ler os lançamentos.");
+      return ((data ?? []) as LinhaLancamento[]).map(lancamentoDe).sort((a, b) => b.em - a.em);
+    },
+    async criar(entrada: { materiaId: string; feitas: number; acertos: number; fonte: string }) {
+      await garantirMigracao();
+      validarLancamento(entrada.feitas, entrada.acertos);
+      const materia = await repoRemoto.materias.obter(entrada.materiaId);
+      if (!materia) throw new ErroEstudo("Matéria não encontrada.");
+      const lancamento: Lancamento = {
+        id: novoId(),
+        materiaId: materia.id,
+        feitas: entrada.feitas,
+        acertos: entrada.acertos,
+        fonte: entrada.fonte.trim(),
+        em: Date.now(),
+      };
+      const { error } = await supabase().from("lancamentos").insert({
+        id: lancamento.id,
+        materia_id: lancamento.materiaId,
+        feitas: lancamento.feitas,
+        acertos: lancamento.acertos,
+        fonte: lancamento.fonte,
+        em: iso(lancamento.em),
+      });
+      checar(error, "Não foi possível guardar o lançamento.");
+      avisarMudanca();
+      return lancamento;
+    },
+    async remover(lancamentoId: string) {
+      await garantirMigracao();
+      const { error } = await supabase().from("lancamentos").delete().eq("id", lancamentoId);
+      checar(error, "Não foi possível excluir o lançamento.");
+      avisarMudanca();
+    },
+  },
+
+  estudos: {
+    async listar(): Promise<Estudo[]> {
+      await garantirMigracao();
+      const { data, error } = await supabase().from("estudos").select("*");
+      checar(error, "Não foi possível ler o tempo de estudo.");
+      return ((data ?? []) as LinhaEstudo[]).map(estudoDe);
+    },
+    async registrar(entrada: { materiaId: string | null; segundos: number; em?: number }) {
+      await garantirMigracao();
+      const segundos = Math.round(entrada.segundos);
+      if (!Number.isFinite(segundos) || segundos < 1) throw new ErroEstudo("A sessão ficou curta demais para registrar.");
+      const estudo: Estudo = {
+        id: novoId(),
+        materiaId: entrada.materiaId,
+        segundos,
+        em: entrada.em ?? Date.now(),
+      };
+      const { error } = await supabase().from("estudos").insert({
+        id: estudo.id,
+        materia_id: estudo.materiaId,
+        segundos: estudo.segundos,
+        em: iso(estudo.em),
+      });
+      checar(error, "Não foi possível guardar a sessão.");
+      avisarMudanca();
+      return estudo;
+    },
+    async remover(estudoId: string) {
+      await garantirMigracao();
+      const { error } = await supabase().from("estudos").delete().eq("id", estudoId);
+      checar(error, "Não foi possível excluir a sessão.");
       avisarMudanca();
     },
   },

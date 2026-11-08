@@ -6,11 +6,16 @@ import { repoRemoto } from "./repoRemoto";
 import { supabaseConfigurado } from "./supabase";
 import { ErroEstudo } from "./erros";
 import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
+import { somarDias } from "./datas";
 import type {
   Bloco,
   CorGrifo,
   Edital,
+  EditalMateria,
+  EditalTopico,
+  Estudo,
   Grifo,
+  Lancamento,
   Materia,
   PdfDoc,
   PostIt,
@@ -80,7 +85,19 @@ const repoLocal = {
       const db = getDb();
       await db.transaction(
         "rw",
-        [db.materias, db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, db.tentativas, db.editalMaterias],
+        [
+          db.materias,
+          db.pdfs,
+          db.blocos,
+          db.grifos,
+          db.postits,
+          db.questoes,
+          db.tentativas,
+          db.editalMaterias,
+          db.editalTopicos,
+          db.lancamentos,
+          db.estudos,
+        ],
         async () => {
           const pdfs = await db.pdfs.where("materiaId").equals(idMateria).toArray();
           for (const pdf of pdfs) {
@@ -94,6 +111,9 @@ const repoLocal = {
           await db.questoes.where("materiaId").equals(idMateria).delete();
           await db.tentativas.where("materiaId").equals(idMateria).delete();
           await db.editalMaterias.where("materiaId").equals(idMateria).delete();
+          await db.editalTopicos.where("materiaId").equals(idMateria).modify({ materiaId: null, blocoId: null });
+          await db.lancamentos.where("materiaId").equals(idMateria).delete();
+          await db.estudos.where("materiaId").equals(idMateria).modify({ materiaId: null });
           await db.materias.delete(idMateria);
         },
       );
@@ -109,6 +129,8 @@ const repoLocal = {
       const lista = await getDb().pdfs.where("materiaId").equals(materiaId).toArray();
       return lista.sort((a, b) => a.createdAt - b.createdAt);
     },
+    // O segundo parâmetro existe só para casar com o repositório remoto, que baixa o arquivo sob demanda.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async obter(pdfId: string, _opcoes?: { arquivo?: boolean }): Promise<PdfDoc | null> {
       return (await getDb().pdfs.get(pdfId)) ?? null;
     },
@@ -226,6 +248,24 @@ const repoLocal = {
     },
     async definirStatus(blocoId: string, status: StatusBloco) {
       const alterados = await getDb().blocos.update(blocoId, { status });
+      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
+    },
+    async salvarResumo(blocoId: string, resumo: string) {
+      const alterados = await getDb().blocos.update(blocoId, { resumo: resumo.trim() });
+      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
+    },
+    async finalizar(blocoId: string, resumo: string) {
+      const limpo = exigirNome(resumo, "Resuma o bloco com as suas palavras antes de finalizar.");
+      const alterados = await getDb().blocos.update(blocoId, {
+        status: "finalizado",
+        resumo: limpo,
+        revisoes: 0,
+        proximaRevisaoEm: somarDias(Date.now(), 1),
+      });
+      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
+    },
+    async registrarRevisao(blocoId: string, entrada: { revisoes: number; proximaRevisaoEm: number }) {
+      const alterados = await getDb().blocos.update(blocoId, entrada);
       if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
     },
     async remover(blocoId: string) {
@@ -355,6 +395,16 @@ const repoLocal = {
       const lista = await getDb().questoes.toArray();
       return lista.sort((a, b) => a.createdAt - b.createdAt);
     },
+    async contarVencidas(agora = Date.now()): Promise<number> {
+      return getDb().questoes.filter((questao) => (questao.proximaEm ?? 0) <= agora).count();
+    },
+    async contarPorMateria(): Promise<Record<string, number>> {
+      const contagem: Record<string, number> = {};
+      await getDb().questoes.each((questao) => {
+        contagem[questao.materiaId] = (contagem[questao.materiaId] ?? 0) + 1;
+      });
+      return contagem;
+    },
     async criar(entrada: {
       blocoId: string;
       materiaId: string;
@@ -379,13 +429,15 @@ const repoLocal = {
         resposta,
         statusRevisao: "nova",
         sequencia: 0,
+        facilidade: 2.5,
+        intervaloDias: 0,
         proximaEm: Date.now(),
         createdAt: Date.now(),
       };
       await db.transaction("rw", db.questoes, async () => {
         const quantidade = await db.questoes.where("blocoId").equals(bloco.id).count();
         if (quantidade >= MAX_QUESTOES) {
-          throw new ErroEstudo("Este bloco já tem 15 questões.");
+          throw new ErroEstudo(`Este bloco já tem ${MAX_QUESTOES} questões.`);
         }
         await db.questoes.add(questao);
       });
@@ -397,13 +449,15 @@ const repoLocal = {
       const alteradas = await getDb().questoes.update(questaoId, { enunciado, resposta });
       if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
     },
-    async definirRevisao(questaoId: string, statusRevisao: StatusRevisao) {
-      const alteradas = await getDb().questoes.update(questaoId, { statusRevisao });
-      if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
-    },
     async registrarJulgamento(
       questaoId: string,
-      entrada: { sequencia: number; proximaEm: number; statusRevisao: StatusRevisao },
+      entrada: {
+        sequencia: number;
+        proximaEm: number;
+        statusRevisao: StatusRevisao;
+        facilidade: number;
+        intervaloDias: number;
+      },
       tentativa: Omit<Tentativa, "questaoId" | "em">,
     ) {
       const db = getDb();
@@ -436,29 +490,35 @@ const repoLocal = {
     async obter(editalId: string): Promise<Edital | null> {
       return (await getDb().editais.get(editalId)) ?? null;
     },
-    async criar(entrada: { nome: string; orgao: string }) {
+    async criar(entrada: { nome: string; orgao: string; dataProva?: number | null }) {
       const edital: Edital = {
         id: id(),
         nome: exigirNome(entrada.nome, "Dê um nome ao edital."),
         orgao: entrada.orgao.trim(),
+        dataProva: entrada.dataProva ?? null,
         createdAt: Date.now(),
       };
       await getDb().editais.add(edital);
       return edital;
     },
-    async atualizar(editalId: string, entrada: { nome: string; orgao: string }) {
+    async atualizar(editalId: string, entrada: { nome: string; orgao: string; dataProva?: number | null }) {
       const alterados = await getDb().editais.update(editalId, {
         nome: exigirNome(entrada.nome, "Dê um nome ao edital."),
         orgao: entrada.orgao.trim(),
+        dataProva: entrada.dataProva ?? null,
       });
       if (!alterados) throw new ErroEstudo("Edital não encontrado.");
     },
     async remover(editalId: string) {
       const db = getDb();
-      await db.transaction("rw", db.editais, db.editalMaterias, async () => {
+      await db.transaction("rw", db.editais, db.editalMaterias, db.editalTopicos, async () => {
         await db.editalMaterias.where("editalId").equals(editalId).delete();
+        await db.editalTopicos.where("editalId").equals(editalId).delete();
         await db.editais.delete(editalId);
       });
+    },
+    async vinculos(): Promise<EditalMateria[]> {
+      return getDb().editalMaterias.toArray();
     },
     async materias(editalId: string): Promise<string[]> {
       const vinculos = await getDb().editalMaterias.where("editalId").equals(editalId).toArray();
@@ -491,7 +551,108 @@ const repoLocal = {
       });
     },
   },
+
+  topicos: {
+    async listarTodos(): Promise<EditalTopico[]> {
+      const lista = await getDb().editalTopicos.toArray();
+      return lista.sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async listarPorEdital(editalId: string): Promise<EditalTopico[]> {
+      const lista = await getDb().editalTopicos.where("editalId").equals(editalId).toArray();
+      return lista.sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async criar(entrada: { editalId: string; materiaId: string | null; nome: string; peso: number }) {
+      const db = getDb();
+      const edital = await db.editais.get(entrada.editalId);
+      if (!edital) throw new ErroEstudo("Edital não encontrado.");
+      const topico: EditalTopico = {
+        id: id(),
+        editalId: edital.id,
+        materiaId: entrada.materiaId,
+        nome: exigirNome(entrada.nome, "Dê um nome ao tópico."),
+        peso: limitarPeso(entrada.peso),
+        blocoId: null,
+        feito: false,
+        createdAt: Date.now(),
+      };
+      await db.editalTopicos.add(topico);
+      return topico;
+    },
+    async atualizar(
+      topicoId: string,
+      entrada: Partial<Pick<EditalTopico, "nome" | "peso" | "materiaId" | "blocoId" | "feito">>,
+    ) {
+      const mudanca: Partial<EditalTopico> = { ...entrada };
+      if (entrada.nome !== undefined) mudanca.nome = exigirNome(entrada.nome, "Dê um nome ao tópico.");
+      if (entrada.peso !== undefined) mudanca.peso = limitarPeso(entrada.peso);
+      const alterados = await getDb().editalTopicos.update(topicoId, mudanca);
+      if (!alterados) throw new ErroEstudo("Tópico não encontrado.");
+    },
+    async remover(topicoId: string) {
+      await getDb().editalTopicos.delete(topicoId);
+    },
+  },
+
+  lancamentos: {
+    async listar(): Promise<Lancamento[]> {
+      const lista = await getDb().lancamentos.toArray();
+      return lista.sort((a, b) => b.em - a.em);
+    },
+    async criar(entrada: { materiaId: string; feitas: number; acertos: number; fonte: string }) {
+      const db = getDb();
+      validarLancamento(entrada.feitas, entrada.acertos);
+      const materia = await db.materias.get(entrada.materiaId);
+      if (!materia) throw new ErroEstudo("Matéria não encontrada.");
+      const lancamento: Lancamento = {
+        id: id(),
+        materiaId: materia.id,
+        feitas: entrada.feitas,
+        acertos: entrada.acertos,
+        fonte: entrada.fonte.trim(),
+        em: Date.now(),
+      };
+      await db.lancamentos.add(lancamento);
+      return lancamento;
+    },
+    async remover(lancamentoId: string) {
+      await getDb().lancamentos.delete(lancamentoId);
+    },
+  },
+
+  estudos: {
+    async listar(): Promise<Estudo[]> {
+      return getDb().estudos.toArray();
+    },
+    async registrar(entrada: { materiaId: string | null; segundos: number; em?: number }) {
+      const segundos = Math.round(entrada.segundos);
+      if (!Number.isFinite(segundos) || segundos < 1) throw new ErroEstudo("A sessão ficou curta demais para registrar.");
+      const estudo: Estudo = {
+        id: id(),
+        materiaId: entrada.materiaId,
+        segundos,
+        em: entrada.em ?? Date.now(),
+      };
+      await getDb().estudos.add(estudo);
+      return estudo;
+    },
+    async remover(estudoId: string) {
+      await getDb().estudos.delete(estudoId);
+    },
+  },
 };
+
+function limitarPeso(peso: number) {
+  if (!Number.isFinite(peso)) return 3;
+  return Math.min(5, Math.max(1, Math.round(peso)));
+}
+
+function validarLancamento(feitas: number, acertos: number) {
+  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
+    throw new ErroEstudo("Use números inteiros.");
+  }
+  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
+  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
+}
 
 function limitar(valor: number, minimo: number, maximo: number) {
   if (!Number.isFinite(valor)) return minimo;

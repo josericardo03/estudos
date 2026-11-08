@@ -85,18 +85,16 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
     const materia = await repo.materias.obter(materiaId);
     if (!materia) return null;
-    const [pdfs, editais, questoes] = await Promise.all([
+    const [pdfs, editais, contagem, blocos] = await Promise.all([
       repo.pdfs.listarPorMateria(materia.id),
       repo.editais.daMateria(materia.id),
-      repo.questoes.listarPorMateria(materia.id),
+      repo.questoes.contarPorMateria(),
+      repo.blocos.listarTodos(),
     ]);
-    const comBlocos = await Promise.all(
-      pdfs.map(async (pdf) => ({
-        pdf,
-        blocos: (await repo.blocos.listarPorPdf(pdf.id)).length,
-      })),
-    );
-    return { materia, pdfs: comBlocos, editais, questoes: questoes.length };
+    const blocosPorPdf = new Map<string, number>();
+    for (const bloco of blocos) blocosPorPdf.set(bloco.pdfId, (blocosPorPdf.get(bloco.pdfId) ?? 0) + 1);
+    const comBlocos = pdfs.map((pdf) => ({ pdf, blocos: blocosPorPdf.get(pdf.id) ?? 0 }));
+    return { materia, pdfs: comBlocos, editais, questoes: contagem[materia.id] ?? 0 };
   }, [materiaId], null);
 
   if (!pronto) return <Abrindo texto="Abrindo a matéria…" />;

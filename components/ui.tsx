@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { mensagemErro } from "@/lib/erros";
 import type { CorGrifo } from "@/lib/types";
 import { nomeDaCor } from "@/lib/types";
 
@@ -72,11 +73,22 @@ export function Confirmar({
   className?: string;
 }) {
   const [aberto, setAberto] = useState(false);
+  const [falha, setFalha] = useState<string | null>(null);
   if (!aberto) {
     return (
-      <button type="button" className={className ?? "btn btn-perigo"} onClick={() => setAberto(true)}>
-        {rotulo}
-      </button>
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={className ?? "btn btn-perigo"}
+          onClick={() => {
+            setFalha(null);
+            setAberto(true);
+          }}
+        >
+          {rotulo}
+        </button>
+        {falha ? <span className="text-sm text-alta">{falha}</span> : null}
+      </span>
     );
   }
   return (
@@ -85,7 +97,10 @@ export function Confirmar({
         type="button"
         className="btn btn-primario"
         onClick={() => {
-          void Promise.resolve(onConfirmar()).finally(() => setAberto(false));
+          Promise.resolve()
+            .then(onConfirmar)
+            .catch((erro: unknown) => setFalha(mensagemErro(erro, "Não foi possível concluir. Tente de novo.")))
+            .finally(() => setAberto(false));
         }}
       >
         {confirmar}

@@ -3,7 +3,10 @@ import type {
   Bloco,
   Edital,
   EditalMateria,
+  EditalTopico,
+  Estudo,
   Grifo,
+  Lancamento,
   Materia,
   PdfDoc,
   PostIt,
@@ -21,6 +24,9 @@ class BancoFoco extends Dexie {
   tentativas!: Table<Tentativa, string>;
   editais!: Table<Edital, string>;
   editalMaterias!: Table<EditalMateria, string>;
+  editalTopicos!: Table<EditalTopico, string>;
+  lancamentos!: Table<Lancamento, string>;
+  estudos!: Table<Estudo, string>;
 
   constructor() {
     super("foco");
@@ -37,6 +43,11 @@ class BancoFoco extends Dexie {
     this.version(2).stores({
       tentativas: "id, questaoId, pdfId, materiaId, blocoId, em",
     });
+    this.version(3).stores({
+      editalTopicos: "id, editalId, materiaId, blocoId",
+      lancamentos: "id, materiaId, em",
+      estudos: "id, materiaId, em",
+    });
   }
 }
 
@@ -49,3 +60,5 @@ export function getDb() {
   if (!banco) banco = new BancoFoco();
   return banco;
 }
+
+export type { BancoFoco };
