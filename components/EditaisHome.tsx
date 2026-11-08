@@ -17,11 +17,10 @@ export function EditaisHome() {
   const [erro, setErro] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const [editais, vinculos, topicos, blocos] = await Promise.all([
+    const [editais, vinculos, topicos] = await Promise.all([
       repo.editais.listar(),
       repo.editais.vinculos(),
       repo.topicos.listarTodos(),
-      repo.blocos.listarTodos(),
     ]);
     const agora = Date.now();
     return editais.map((edital) => {
@@ -30,7 +29,7 @@ export function EditaisHome() {
         edital,
         materias: vinculos.filter((vinculo) => vinculo.editalId === edital.id).length,
         topicos: daProva.length,
-        cobertura: coberturaDe(daProva, blocos),
+        cobertura: coberturaDe(daProva),
         prova: descreverProva(edital.dataProva, agora),
       };
     });
@@ -130,7 +129,7 @@ export function EditaisHome() {
                         style={{ width: `${porcentagem(item.cobertura.fracao)}%` }}
                       />
                     </span>
-                    {porcentagem(item.cobertura.fracao)}% coberto ({item.cobertura.cobertos}/{item.cobertura.total} tópicos)
+                    {porcentagem(item.cobertura.fracao)}% estudado ({item.cobertura.cobertos}/{item.cobertura.total} tópicos)
                   </span>
                 ) : null}
               </Link>

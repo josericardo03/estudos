@@ -1,4 +1,4 @@
-import { diasEntre, somarDias } from "./datas";
+import { diasEntre, inicioDoDia, somarDias } from "./datas";
 import type { Confianca, Nota, Questao, StatusRevisao, Tentativa } from "./types";
 
 /** 1º ao 5º acerto das questões antigas, que ainda não têm intervalo guardado. */
@@ -31,7 +31,7 @@ export type Agenda = {
 };
 
 export function estaDevida(questao: Questao, agora = Date.now()) {
-  return (questao.proximaEm ?? 0) <= agora;
+  return !questao.suspensa && (questao.proximaEm ?? 0) <= agora;
 }
 
 function intervaloLegado(sequencia: number) {
@@ -107,14 +107,6 @@ export function calcularAgenda(
     proximaEm: somarDias(agora, dias),
     statusRevisao: dias >= DIAS_PARA_DOMINADA ? "dominada" : "nova",
   };
-}
-
-/** Intervalos da releitura ativa de um bloco finalizado: 7, 30, 90 e depois a cada 180 dias. */
-const DIAS_RELEITURA = [7, 30, 90, 180];
-
-export function proximaReleitura(revisoesFeitas: number, agora = Date.now()) {
-  const dias = DIAS_RELEITURA[Math.min(Math.max(0, revisoesFeitas - 1), DIAS_RELEITURA.length - 1)];
-  return somarDias(agora, dias);
 }
 
 export function notaDeAcerto(acertou: boolean): Nota {
@@ -348,15 +340,62 @@ export function intercalarPorMateria<T extends Questao>(ordenadas: T[]) {
   return resultado;
 }
 
+export const LIMITE_NOVOS_PADRAO = 20;
+export const LIMITE_REVISOES_PADRAO = 200;
+
+/** Quantos cards novos você começou e quantas revisões fez hoje. */
+export function resumoDoDia(tentativas: TentativaMinima[], agora = Date.now()) {
+  const comeco = inicioDoDia(agora);
+  let revisoes = 0;
+  const novos = new Set<string>();
+  for (const [questaoId, lista] of porQuestao(tentativas)) {
+    const primeira = lista[lista.length - 1];
+    for (const item of lista) {
+      if (item.em < comeco) continue;
+      if (item === primeira) novos.add(questaoId);
+      else revisoes += 1;
+    }
+  }
+  return { novos: novos.size, revisoes };
+}
+
 /**
- * Fila do dia: só o que venceu. Hipercorreções primeiro, depois os erros, depois
- * o mais atrasado; as matérias se intercalam (estudo intercalado).
+ * Fila do dia, como no Anki: só o que venceu, com teto de cards novos e de revisões
+ * por dia. Primeiro as revisões (hipercorreções, depois erros, depois as mais
+ * atrasadas), depois os cards novos. As matérias se intercalam em cada grupo.
  */
-export function filaDeHoje<T extends Questao>(questoes: T[], tentativas: TentativaMinima[], agora = Date.now()) {
+export function filaDeHoje<T extends Questao>(
+  questoes: T[],
+  tentativas: TentativaMinima[],
+  opcoes: { agora?: number; limiteNovos?: number; limiteRevisoes?: number } = {},
+) {
+  const agora = opcoes.agora ?? Date.now();
+  const limiteNovos = opcoes.limiteNovos ?? LIMITE_NOVOS_PADRAO;
+  const limiteRevisoes = opcoes.limiteRevisoes ?? LIMITE_REVISOES_PADRAO;
+  const feitoHoje = resumoDoDia(tentativas, agora);
+  const julgadas = new Set(tentativas.map((item) => item.questaoId));
   const hiper = hipercorrecoes(tentativas);
   const peso = (questao: T) => (hiper.has(questao.id) ? 0 : questao.statusRevisao === "revisar" ? 1 : 2);
-  const devidas = questoes
-    .filter((questao) => estaDevida(questao, agora))
+
+  const devidas = questoes.filter((questao) => estaDevida(questao, agora));
+  const novas = devidas
+    .filter((questao) => !julgadas.has(questao.id))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const revisoes = devidas
+    .filter((questao) => julgadas.has(questao.id))
     .sort((a, b) => peso(a) - peso(b) || maisAtrasada(a, b));
-  return intercalarPorMateria(devidas);
+
+  const vagasNovas = Math.max(0, limiteNovos - feitoHoje.novos);
+  const vagasRevisoes = Math.max(0, limiteRevisoes - feitoHoje.revisoes);
+  const novasDoDia = novas.slice(0, vagasNovas);
+  const revisoesDoDia = revisoes.slice(0, vagasRevisoes);
+
+  return {
+    fila: [...intercalarPorMateria(revisoesDoDia), ...intercalarPorMateria(novasDoDia)],
+    novas: novasDoDia.length,
+    revisoes: revisoesDoDia.length,
+    ficaramNovas: novas.length - novasDoDia.length,
+    ficaramRevisoes: revisoes.length - revisoesDoDia.length,
+    feitoHoje,
+  };
 }

@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { gerarCloze } from "@/lib/cloze";
+import { resumoDoCard } from "@/lib/cards";
+import { sugerirLacunas } from "@/lib/cloze";
 import { mensagemErro, mensagemPdf } from "@/lib/erros";
-import { blocoDaPagina, descreverFaixa } from "@/lib/faixa";
 import { abrirDocumento, carregarPdfjs, escalaCss, medidaNitida, type DocumentoPdf } from "@/lib/pdf";
-import { gravarBruto, lerBruto, usePreferencia } from "@/lib/preferencias";
+import { usePreferencia } from "@/lib/preferencias";
 import { normalizarRects } from "@/lib/rects";
 import { repo } from "@/lib/repo";
-import { caminhoBloco, caminhoMateria } from "@/lib/rotas";
+import { caminhoMateria } from "@/lib/rotas";
 import { Caderno } from "../Caderno";
-import type { CorGrifo, Grifo, PostIt, Questao, Rect } from "@/lib/types";
-import { IMPORTANTE, MAX_QUESTOES, PRIORIDADES, nomeDaCor } from "@/lib/types";
+import { PainelBusca } from "./PainelBusca";
+import type { CorGrifo, Grifo, PostIt, Questao, Rect, TipoCard } from "@/lib/types";
+import { IMPORTANTE, PRIORIDADES, nomeDaCor } from "@/lib/types";
 import { useTema } from "@/lib/tema";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado, QuestaoConferencia } from "../ui";
@@ -198,12 +199,12 @@ function BarraLado({
   aoOcultar,
   aoDivisao,
 }: {
-  nome: "cadernão" | "painel";
+  nome: "cadernão" | "painel" | "busca";
   aoAjustar: (delta: number) => void;
   aoOcultar: () => void;
   aoDivisao: (evento: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
-  const titulo = nome === "cadernão" ? "Cadernão" : "Painel";
+  const titulo = nome === "cadernão" ? "Cadernão" : nome === "busca" ? "Busca" : "Painel";
   return (
     <>
       <button
@@ -259,8 +260,10 @@ export function LeitorPdf({
   const origemMarca = useRef<{ x: number; y: number } | null>(null);
   const inicioToque = useRef<{ x: number; y: number } | null>(null);
   const questoesDialogo = useRef<HTMLDialogElement>(null);
+  const campoEnunciado = useRef<HTMLTextAreaElement>(null);
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
   const desfazerRef = useRef<() => void>(() => {});
+  const criarCardRef = useRef<() => void>(() => {});
   const grifosAtuais = useRef<Grifo[]>([]);
   const paginaRestaurada = useRef(false);
 
@@ -277,9 +280,6 @@ export function LeitorPdf({
   const [temTexto, setTemTexto] = useState(true);
   const [selecao, setSelecao] = useState<Selecao | null>(null);
   const [rascunho, setRascunho] = useState<Rascunho | null>(null);
-  const [titulo, setTitulo] = useState("");
-  const [inicio, setInicio] = useState(String(Math.max(1, paginaInicial || 1)));
-  const [fim, setFim] = useState(String(Math.max(1, paginaInicial || 1)));
   const [corMarca, setCorMarca] = useState<CorGrifo | null>(null);
   const [sublinhando, setSublinhar] = useState(false);
   const [riscos, setRiscos] = useState<{ id: string; pagina: number; rects: Rect[] }[]>([]);
@@ -287,7 +287,8 @@ export function LeitorPdf({
   const [postit, setPostit] = useState("");
   const [colocandoPostit, setColocandoPostit] = useState(false);
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
-  const [painel, setPainel] = useState<"anotacoes" | "caderno" | "oculto">("anotacoes");
+  const [painel, setPainel] = useState<"anotacoes" | "caderno" | "busca" | "oculto">("anotacoes");
+  const [termoBusca, setTermoBusca] = useState("");
   const [ferramentas, setFerramentas] = useState(false);
   const [barra, setBarra] = useState(true);
   const [modoFoco, setModoFoco] = useState(false);
@@ -303,7 +304,9 @@ export function LeitorPdf({
   const [larguraCaderno, setLarguraCaderno] = useState(640);
   const [enunciado, setEnunciado] = useState("");
   const [resposta, setResposta] = useState("");
-  const [guardando, setGuardando] = useState(false);
+  const [tipoCard, setTipoCard] = useState<TipoCard>("lacuna");
+  const [topicoId, setTopicoId] = useState("");
+  const [imagemCard, setImagemCard] = useState<Blob | null>(null);
   const [guardandoQuestao, setGuardandoQuestao] = useState(false);
   const [editandoQuestao, setEditandoQuestao] = useState<string | null>(null);
   const [foco, setFoco] = useState<FocoMarca | null>(null);
@@ -316,8 +319,6 @@ export function LeitorPdf({
     setOrigem(paginaInicial);
     const proxima = Math.max(1, paginaInicial || 1);
     setPagina(proxima);
-    setInicio(String(proxima));
-    setFim(String(proxima));
   }
 
   const { dados: arquivo, pronto: arquivoPronto, erro: erroArquivo } = useConsulta(
@@ -330,10 +331,14 @@ export function LeitorPdf({
     [arquivo?.materiaId],
     null,
   );
-  const { dados: blocos } = useConsulta(() => repo.blocos.listarPorPdf(pdfId), [pdfId], []);
   const { dados: grifos, pronto: grifosProntos } = useConsulta(() => repo.grifos.listarPorPdf(pdfId), [pdfId], []);
   const { dados: postits, pronto: postitsProntos } = useConsulta(() => repo.postits.listarPorPdf(pdfId), [pdfId], []);
   const { dados: questoes } = useConsulta(() => repo.questoes.listarPorPdf(pdfId), [pdfId], []);
+  const { dados: topicos } = useConsulta(() => repo.topicos.listarTodos(), [], []);
+  const arquivoRef = useRef(arquivo);
+  useEffect(() => {
+    arquivoRef.current = arquivo;
+  });
 
   useEffect(() => {
     grifosAtuais.current = grifos;
@@ -350,7 +355,6 @@ export function LeitorPdf({
   const total = documento?.numPages ?? arquivo?.numPages ?? 1;
   const paginaNumero = Number.isFinite(pagina) ? pagina : 1;
   const paginaSegura = Math.min(total, Math.max(1, paginaNumero));
-  const blocoIdAtual = blocoDaPagina(blocos, paginaSegura)?.id ?? null;
 
   if (marcaInicial && marcaAplicada !== marcaInicial && grifosProntos && postitsProntos) {
     setMarcaAplicada(marcaInicial);
@@ -369,21 +373,16 @@ export function LeitorPdf({
     }
   }
 
-  const [blocoVisto, setBlocoVisto] = useState(blocoIdAtual);
-  if (blocoVisto !== blocoIdAtual) {
-    setBlocoVisto(blocoIdAtual);
-    setEditandoQuestao(null);
-  }
-  useEffect(() => {
-    questoesDialogo.current?.close();
-  }, [blocoIdAtual]);
-
   const [paginaVista, setPaginaVista] = useState(paginaSegura);
   if (paginaVista !== paginaSegura) {
     setPaginaVista(paginaSegura);
     setColocandoPostit(false);
     setPostitAberto(null);
+    setEditandoQuestao(null);
   }
+  useEffect(() => {
+    questoesDialogo.current?.close();
+  }, [paginaSegura]);
 
   useEffect(() => {
     if (!postitAberto) return;
@@ -392,7 +391,7 @@ export function LeitorPdf({
 
   useEffect(() => {
     const arquivoId = arquivo?.id;
-    const blob = arquivo?.blob;
+    const blob = arquivoRef.current?.blob;
     if (!arquivoId || !blob) return;
     let ativo = true;
     let doc: DocumentoPdf | null = null;
@@ -406,12 +405,8 @@ export function LeitorPdf({
         doc = aberto;
         docIdRef.current = arquivoId;
         if (!paginaExplicita && !marcaInicial) {
-          const salva = Number(lerBruto("foco.pagina." + arquivoId));
-          if (Number.isInteger(salva) && salva > 1 && salva <= aberto.numPages) {
-            setPagina(salva);
-            setInicio(String(salva));
-            setFim(String(salva));
-          }
+          const salva = arquivoRef.current?.ultimaPagina ?? 0;
+          if (Number.isInteger(salva) && salva > 1 && salva <= aberto.numPages) setPagina(salva);
         }
         paginaRestaurada.current = true;
         setErroLeitura(null);
@@ -427,12 +422,35 @@ export function LeitorPdf({
     };
     // paginaExplicita e marcaInicial só importam na abertura do arquivo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arquivo?.id, arquivo?.blob]);
+  }, [arquivo?.id]);
 
+  // A página fica guardada no banco, então acompanha você em qualquer aparelho.
   useEffect(() => {
     if (!documento || !paginaRestaurada.current) return;
-    gravarBruto("foco.pagina." + pdfId, String(paginaSegura));
+    const espera = setTimeout(() => {
+      void repo.pdfs.registrarLeitura(pdfId, paginaSegura).catch(() => {
+        /* guardar a página é só uma comodidade */
+      });
+    }, 1200);
+    return () => clearTimeout(espera);
   }, [documento, paginaSegura, pdfId]);
+
+  // Destaca o termo buscado na camada de texto da página aberta.
+  useEffect(() => {
+    const camada = textoRef.current;
+    if (!camada || !pronta) return;
+    const procurado = termoBusca
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    camada.querySelectorAll("span").forEach((trecho) => {
+      const texto = (trecho.textContent ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+      trecho.classList.toggle("achado", procurado.length > 1 && texto.includes(procurado));
+    });
+  }, [termoBusca, pronta, paginaSegura]);
 
   useEffect(() => {
     const palco = palcoRef.current;
@@ -608,10 +626,16 @@ export function LeitorPdf({
 
   useEffect(() => {
     function aoTeclar(evento: KeyboardEvent) {
+      if ((evento.ctrlKey || evento.metaKey) && !evento.shiftKey && evento.key.toLowerCase() === "f") {
+        evento.preventDefault();
+        setPainel("busca");
+        requestAnimationFrame(() => document.getElementById("busca-pdf")?.focus());
+        return;
+      }
       const alvo = evento.target;
       if (
         alvo instanceof HTMLElement &&
-        (alvo.tagName === "INPUT" || alvo.tagName === "TEXTAREA" || alvo.isContentEditable)
+        (alvo.tagName === "INPUT" || alvo.tagName === "TEXTAREA" || alvo.tagName === "SELECT" || alvo.isContentEditable)
       ) {
         return;
       }
@@ -622,6 +646,9 @@ export function LeitorPdf({
       if (evento.key === "ArrowLeft") {
         evento.preventDefault();
         setPagina((atual) => Math.max(1, atual - 1));
+      }
+      if (evento.key.toLowerCase() === "c" && !evento.ctrlKey && !evento.metaKey && !evento.altKey) {
+        criarCardRef.current();
       }
       if (evento.key === "Escape") {
         setCorMarca(null);
@@ -689,20 +716,48 @@ export function LeitorPdf({
     desfazerRef.current = desfazerMarcacao;
   });
 
+  function preencherCard(texto: string, tipo: TipoCard, imagem?: Blob | null) {
+    setTipoCard(tipo);
+    if (tipo === "lacuna") {
+      setEnunciado(sugerirLacunas(texto));
+      setResposta("");
+    } else {
+      setEnunciado("");
+      setResposta(texto);
+    }
+    setImagemCard(imagem ?? null);
+    setPainel("anotacoes");
+    setErro(null);
+    requestAnimationFrame(() => {
+      const campo = document.getElementById("enunciado-leitor");
+      campo?.scrollIntoView({ block: "center" });
+      campo?.focus();
+    });
+  }
+
+  function criarCardDaSelecao() {
+    if (!selecao) return;
+    preencherCard(selecao.texto, "lacuna");
+    window.getSelection()?.removeAllRanges();
+    setSelecao(null);
+  }
+
+  useEffect(() => {
+    criarCardRef.current = criarCardDaSelecao;
+  });
+
   if (!arquivoPronto) return <Abrindo texto="Abrindo o PDF…" />;
   if (erroArquivo) return <div className="px-5 py-10"><Aviso texto={erroArquivo} /></div>;
   if (!arquivo || arquivo.materiaId !== materiaId) {
     return <NaoEncontrado titulo="PDF não encontrado" detalhe="Esse arquivo não está nesta matéria." />;
   }
 
-  const blocoAtual = blocoDaPagina(blocos, paginaSegura);
   const grifosDaPagina = grifos.filter((grifo) => grifo.pagina === paginaSegura);
   const postitsDaPagina = postits
     .filter((item) => item.pagina === paginaSegura)
     .sort((a, b) => a.y - b.y || a.createdAt - b.createdAt);
-  const questoesDoBloco = blocoAtual
-    ? questoes.filter((questao) => questao.blocoId === blocoAtual.id)
-    : [];
+  const cardsDaPagina = questoes.filter((questao) => questao.pagina === paginaSegura);
+  const topicosDaMateria = topicos.filter((topico) => !topico.materiaId || topico.materiaId === materiaId);
   const medidaAtual = medida?.pagina === paginaSegura ? medida : null;
 
   async function gravarGrifo(cor: CorGrifo, texto: string, rects: Rect[]) {
@@ -929,55 +984,41 @@ export function LeitorPdf({
     void gravarGrifo(corMarca, extraido || reserva, [rect]);
   }
 
-  async function excluirBloco(blocoId: string) {
-    setErro(null);
-    try {
-      await repo.blocos.remover(blocoId);
-      setAviso("Bloco excluído. Os grifos e post-its continuam no PDF.");
-    } catch (falha) {
-      setErro(mensagemErro(falha, "Não foi possível excluir o bloco."));
+  function marcarLacuna() {
+    const campo = campoEnunciado.current;
+    if (!campo) return;
+    const de = campo.selectionStart;
+    const ate = campo.selectionEnd;
+    if (de === ate) {
+      setErro("Selecione, no texto do card, a palavra que vira lacuna.");
+      return;
     }
+    setErro(null);
+    setEnunciado(`${enunciado.slice(0, de)}{{${enunciado.slice(de, ate)}}}${enunciado.slice(ate)}`);
   }
 
-  async function criarBloco(evento: React.FormEvent) {
+  async function salvarCard(evento: React.FormEvent) {
     evento.preventDefault();
-    setGuardando(true);
-    setErro(null);
-    setAviso(null);
-    try {
-      await repo.blocos.criar({
-        pdfId,
-        titulo,
-        paginaInicio: Number(inicio),
-        paginaFim: Number(fim),
-      });
-      setTitulo("");
-      setAviso("Bloco criado. Os grifos e post-its dessa faixa já entram nele.");
-    } catch (falha) {
-      setErro(mensagemErro(falha, "Não foi possível criar o bloco."));
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  async function salvarQuestao(evento: React.FormEvent) {
-    evento.preventDefault();
-    if (!blocoAtual) return;
     setGuardandoQuestao(true);
     setErro(null);
     setAviso(null);
     try {
       await repo.questoes.criar({
-        blocoId: blocoAtual.id,
         materiaId,
+        pdfId,
+        pagina: paginaSegura,
+        topicoId: topicoId || null,
+        tipo: tipoCard,
         enunciado,
         resposta,
+        imagem: imagemCard ?? undefined,
       });
       setEnunciado("");
       setResposta("");
-      setAviso(`Questão salva no banco, no bloco ${blocoAtual.titulo}.`);
+      setImagemCard(null);
+      setAviso(`Card salvo na página ${paginaSegura}. Ele entra na revisão de hoje.`);
     } catch (falha) {
-      setErro(mensagemErro(falha, "Não foi possível salvar a questão."));
+      setErro(mensagemErro(falha, "Não foi possível salvar o card."));
     } finally {
       setGuardandoQuestao(false);
     }
@@ -1071,7 +1112,7 @@ export function LeitorPdf({
     const maximo = Math.round(window.innerWidth * 0.75);
     const aplicar = (atual: number) => limitar(atual + delta, 300, maximo);
     if (painel === "caderno") setLarguraCaderno(aplicar);
-    if (painel === "anotacoes") setLarguraPainel(aplicar);
+    if (painel === "anotacoes" || painel === "busca") setLarguraPainel(aplicar);
   }
 
   function iniciarDivisao(evento: React.PointerEvent<HTMLButtonElement>) {
@@ -1132,6 +1173,9 @@ export function LeitorPdf({
           </button>
           <button type="button" className="btn btn-seletor" aria-pressed={painel === "caderno"} onClick={() => { sairFoco(); setPainel("caderno"); }}>
             Cadernão
+          </button>
+          <button type="button" className="btn btn-seletor" aria-pressed={painel === "busca"} onClick={() => { sairFoco(); setPainel("busca"); }}>
+            Buscar
           </button>
           <button type="button" className="btn btn-seletor" aria-pressed={modoFoco} onClick={() => (modoFoco ? sairFoco() : entrarFoco())}>
             Foco
@@ -1196,6 +1240,17 @@ export function LeitorPdf({
               >
                 <span className="ponto ponto-esconder" aria-hidden />
                 Esconder
+              </button>
+              <button
+                type="button"
+                className="btn btn-cor"
+                disabled={!selecao}
+                title="Cria um card a partir do trecho selecionado (tecla C)"
+                onMouseDown={(evento) => evento.preventDefault()}
+                onClick={criarCardDaSelecao}
+              >
+                <span className="ponto ponto-card" aria-hidden />
+                Card
               </button>
             </div>
             {corMarca || sublinhando ? (
@@ -1345,6 +1400,17 @@ export function LeitorPdf({
               >
                 <span className="ponto ponto-esconder" aria-hidden />
                 Esconder
+              </button>
+              <button
+                type="button"
+                className="btn btn-cor"
+                disabled={!selecao}
+                title="Cria um card a partir do trecho selecionado (tecla C)"
+                onMouseDown={(evento) => evento.preventDefault()}
+                onClick={criarCardDaSelecao}
+              >
+                <span className="ponto ponto-card" aria-hidden />
+                Card
               </button>
             </div>
             {estreita ? (
@@ -1727,6 +1793,25 @@ export function LeitorPdf({
           </div>
         </aside>
       ) : null}
+      {painel === "busca" ? (
+        <aside className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-3 md:pr-4" aria-label="Busca e sumário">
+          <BarraLado
+            nome="busca"
+            aoAjustar={alterarLado}
+            aoOcultar={() => setPainel("oculto")}
+            aoDivisao={iniciarDivisao}
+          />
+          {documento ? (
+            <PainelBusca
+              documento={documento}
+              onIrParaPagina={(destino) => setPagina(Math.min(total, Math.max(1, destino)))}
+              onTermo={setTermoBusca}
+            />
+          ) : (
+            <p className="text-sm text-muted">O PDF ainda está abrindo…</p>
+          )}
+        </aside>
+      ) : null}
       {painel === "anotacoes" ? (
       <aside className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-3 md:pr-4" aria-label="Anotações da página">
         <BarraLado
@@ -1745,91 +1830,121 @@ export function LeitorPdf({
         <section className="cartao shrink-0 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="font-serif text-2xl">Questões do bloco</h2>
-              {blocoAtual ? (
-                <p className="mt-1 text-sm text-muted">
-                  {descreverFaixa(blocoAtual.paginaInicio, blocoAtual.paginaFim)} · {questoesDoBloco.length}/{MAX_QUESTOES}
+              <h2 className="font-serif text-2xl">Novo card</h2>
+              <p className="mt-1 text-sm text-muted">
+                Página {paginaSegura} · {questoes.length} {questoes.length === 1 ? "card" : "cards"} neste PDF
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn shrink-0"
+              onClick={() => {
+                setEditandoQuestao(null);
+                const dialogo = questoesDialogo.current;
+                if (dialogo && !dialogo.open) dialogo.showModal();
+              }}
+            >
+              Cards da página ({cardsDaPagina.length})
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Tipo de card">
+            <button type="button" className="btn btn-seletor" aria-pressed={tipoCard === "lacuna"} onClick={() => setTipoCard("lacuna")}>
+              Lacuna
+            </button>
+            <button type="button" className="btn btn-seletor" aria-pressed={tipoCard === "basico"} onClick={() => setTipoCard("basico")}>
+              Pergunta e resposta
+            </button>
+          </div>
+          <form onSubmit={salvarCard} className="mt-3 grid gap-2">
+            <div>
+              <label className="rotulo" htmlFor="enunciado-leitor">
+                {tipoCard === "lacuna" ? "Texto (marque as lacunas com {{ }})" : "Frente"}
+              </label>
+              <textarea
+                id="enunciado-leitor"
+                ref={campoEnunciado}
+                className="campo min-h-24"
+                placeholder={
+                  tipoCard === "lacuna"
+                    ? "Selecione um trecho no PDF e aperte C. Ou cole aqui e use Marcar lacuna."
+                    : "A pergunta que você quer saber responder de cabeça."
+                }
+                value={enunciado}
+                onChange={(evento) => setEnunciado(evento.target.value)}
+                onKeyDown={(evento) => {
+                  if (evento.key === "Enter" && (evento.ctrlKey || evento.metaKey)) {
+                    evento.preventDefault();
+                    evento.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                autoComplete="off"
+              />
+              {tipoCard === "lacuna" ? (
+                <button type="button" className="btn mt-2" onClick={marcarLacuna}>
+                  Marcar lacuna na seleção
+                </button>
+              ) : null}
+            </div>
+            <div>
+              <label className="rotulo" htmlFor="resposta-leitor">
+                {tipoCard === "lacuna" ? "Comentário (opcional)" : "Verso"}
+              </label>
+              <textarea
+                id="resposta-leitor"
+                className="campo min-h-16"
+                placeholder={
+                  tipoCard === "lacuna" ? "Uma dica ou a fundamentação, se quiser." : "A resposta, do jeito que você quer lembrar."
+                }
+                value={resposta}
+                onChange={(evento) => setResposta(evento.target.value)}
+                onKeyDown={(evento) => {
+                  if (evento.key === "Enter" && (evento.ctrlKey || evento.metaKey)) {
+                    evento.preventDefault();
+                    evento.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="rotulo" htmlFor="topico-leitor">
+                Tópico do edital
+              </label>
+              <select id="topico-leitor" className="campo" value={topicoId} onChange={(evento) => setTopicoId(evento.target.value)}>
+                <option value="">Sem tópico</option>
+                {topicosDaMateria.map((topico) => (
+                  <option key={topico.id} value={topico.id}>
+                    {topico.nome}
+                  </option>
+                ))}
+              </select>
+              {topicosDaMateria.length === 0 ? (
+                <p className="mt-1 text-xs text-muted">
+                  Cadastre os tópicos em Editais para ver depois onde você mais erra.
                 </p>
               ) : null}
             </div>
-            {blocoAtual ? (
-              <button
-                type="button"
-                className="btn shrink-0"
-                onClick={() => {
-                  setEditandoQuestao(null);
-                  const dialogo = questoesDialogo.current;
-                  if (dialogo && !dialogo.open) dialogo.showModal();
-                }}
-              >
-                Ver questões ({questoesDoBloco.length})
-              </button>
+            {imagemCard ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--campo-bg)] px-3 py-2 text-sm">
+                <span>Com a figura do trecho marcado</span>
+                <button type="button" className="btn-perigo" onClick={() => setImagemCard(null)}>
+                  Tirar
+                </button>
+              </div>
             ) : null}
-          </div>
-          {blocoAtual ? (
-            <>
-              {questoesDoBloco.length >= MAX_QUESTOES ? (
-                <p className="mt-3 text-sm">Este bloco já tem {MAX_QUESTOES} questões.</p>
-              ) : (
-                <form onSubmit={salvarQuestao} className="mt-3 grid gap-2">
-                  <div>
-                    <label className="rotulo" htmlFor="enunciado-leitor">
-                      Enunciado
-                    </label>
-                    <textarea
-                      id="enunciado-leitor"
-                      className="campo min-h-20"
-                      placeholder="Digite ou cole aqui a questão para fixação mnêmica..."
-                      value={enunciado}
-                      onChange={(evento) => setEnunciado(evento.target.value)}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div>
-                    <label className="rotulo" htmlFor="resposta-leitor">
-                      Resposta
-                    </label>
-                    <textarea
-                      id="resposta-leitor"
-                      className="campo min-h-16"
-                      placeholder="Gabarito comentado ou síntese da fundamentação legal..."
-                      value={resposta}
-                      onChange={(evento) => setResposta(evento.target.value)}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <button className="btn btn-primario" type="submit" disabled={guardandoQuestao}>
-                      {guardandoQuestao ? "Salvando…" : "Salvar questão"}
-                    </button>
-                    <p className="text-sm text-muted">Ao salvar, a questão entra no banco.</p>
-                  </div>
-                </form>
-              )}
-            </>
-          ) : (
-            <p className="mt-2 text-sm text-muted">
-              Crie o bloco desta página para escrever as questões da faixa.
-            </p>
-          )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button className="btn btn-primario" type="submit" disabled={guardandoQuestao}>
+                {guardandoQuestao ? "Salvando…" : "Salvar card"}
+              </button>
+              <p className="text-sm text-muted">Ctrl+Enter salva. Fica ligado a esta página.</p>
+            </div>
+          </form>
         </section>
         <div className="cartao p-4">
         <section>
           <div className="flex items-start justify-between gap-3">
             <h2 className="font-serif text-2xl">Esta página</h2>
-            {blocoAtual ? (
-              <Link className="shrink-0 text-sm text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, blocoAtual.id)}>
-                Abrir pacote do bloco
-              </Link>
-            ) : null}
           </div>
-          {blocoAtual ? (
-            <p className="mt-2 text-sm text-muted">
-              {blocoAtual.titulo} · {descreverFaixa(blocoAtual.paginaInicio, blocoAtual.paginaFim)}
-            </p>
-          ) : (
-            <p className="mt-2 text-sm text-muted">Esta página ainda não está num bloco.</p>
-          )}
           {pronta && !temTexto ? (
             <p className="mt-3 text-sm text-muted">
               Esta página não tem texto selecionável. O post-it continua disponível.
@@ -1873,23 +1988,18 @@ export function LeitorPdf({
                     <span className="recorte mt-1 text-sm">{grifo.texto}</span>
                   </button>
                   <div className="mt-1 flex shrink-0 flex-col items-end gap-1">
-                    {blocoAtual && questoesDoBloco.length < MAX_QUESTOES ? (
-                      <button
-                        type="button"
-                        className="btn"
-                        title="Gera uma pergunta de lacuna a partir deste grifo"
-                        onClick={() => {
-                          const gerada = gerarCloze(grifo.texto);
-                          setEnunciado(gerada.enunciado);
-                          setResposta(gerada.resposta);
-                          const campo = document.getElementById("enunciado-leitor");
-                          campo?.scrollIntoView({ block: "center" });
-                          campo?.focus();
-                        }}
-                      >
-                        Virar questão
-                      </button>
-                    ) : null}
+                    <button
+                      type="button"
+                      className="btn"
+                      title="Gera um card a partir deste grifo"
+                      onClick={() => {
+                        const soFigura = grifo.texto.startsWith("Figura ·");
+                        if (grifo.imagem) preencherCard(soFigura ? "" : grifo.texto, "basico", grifo.imagem);
+                        else preencherCard(grifo.texto, "lacuna");
+                      }}
+                    >
+                      Virar card
+                    </button>
                     <button
                       type="button"
                       className="btn-perigo"
@@ -1972,143 +2082,60 @@ export function LeitorPdf({
         </section>
 
         </div>
-        <section className="cartao p-4">
-          <h2 className="font-serif text-xl">Novo bloco</h2>
-          <form onSubmit={criarBloco} className="mt-2 grid gap-2">
-            <div>
-              <label className="rotulo" htmlFor="titulo-novo-bloco">
-                Título
-              </label>
-              <input
-                id="titulo-novo-bloco"
-                className="campo"
-                value={titulo}
-                onChange={(evento) => setTitulo(evento.target.value)}
-                placeholder="Opcional"
-                autoComplete="off"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="rotulo" htmlFor="inicio-novo">
-                  De
-                </label>
-                <input
-                  id="inicio-novo"
-                  className="campo"
-                  type="number"
-                  min={1}
-                  max={total}
-                  value={inicio}
-                  onChange={(evento) => setInicio(evento.target.value)}
-                />
-              </div>
-              <div>
-                <label className="rotulo" htmlFor="fim-novo">
-                  Até
-                </label>
-                <input
-                  id="fim-novo"
-                  className="campo"
-                  type="number"
-                  min={1}
-                  max={total}
-                  value={fim}
-                  onChange={(evento) => setFim(evento.target.value)}
-                />
-              </div>
-            </div>
-            <button className="btn btn-primario justify-self-start" type="submit" disabled={guardando}>
-              {guardando ? "Criando…" : "Criar bloco"}
-            </button>
-          </form>
-        </section>
-
-        <section className="cartao p-4">
-          <h2 className="font-serif text-xl">Blocos deste PDF</h2>
-          {blocos.length === 0 ? (
-            <p className="mt-2 text-sm text-muted">Nenhuma faixa ainda.</p>
-          ) : (
-            <ul className="mt-2 flex flex-col gap-2">
-              {blocos.map((bloco) => (
-                <li key={bloco.id} className="flex items-start justify-between gap-2 rounded-xl bg-[var(--campo-bg)] px-3 py-2">
-                  <button type="button" className="min-w-0 text-left" onClick={() => setPagina(bloco.paginaInicio)}>
-                    <span className="block font-medium">{bloco.titulo}</span>
-                    <span className="text-sm text-muted">{descreverFaixa(bloco.paginaInicio, bloco.paginaFim)}</span>
-                  </button>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Link className="text-sm text-pine no-underline hover:underline" href={caminhoBloco(materiaId, pdfId, bloco.id)}>
-                      Pacote
-                    </Link>
-                    <Confirmar
-                      rotulo="Excluir"
-                      confirmar="Excluir bloco"
-                      onConfirmar={() => {
-                        if (blocoAtual?.id === bloco.id) questoesDialogo.current?.close();
-                        return excluirBloco(bloco.id);
-                      }}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
         </div>
       </aside>
       ) : null}
 
-      {blocoAtual ? (
-        <dialog
-          ref={questoesDialogo}
-          className="popup"
-          aria-labelledby="titulo-popup-questoes"
-          onClose={() => setEditandoQuestao(null)}
-        >
-          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-            <h2 id="titulo-popup-questoes" className="min-w-0 break-words font-serif text-xl sm:text-2xl">
-              {blocoAtual.titulo}
-            </h2>
-            <button type="button" className="btn shrink-0" onClick={() => questoesDialogo.current?.close()}>
-              Fechar
-            </button>
-          </div>
-          <div className="max-h-[70dvh] overflow-auto px-4 py-4">
-            <p className="text-sm text-muted">
-              {questoesDoBloco.length}/{MAX_QUESTOES} no banco de {materia?.nome ?? "esta matéria"}.
-            </p>
-            {questoesDoBloco.length === 0 ? (
-              <p className="mt-4 text-muted">Este bloco ainda não tem questões.</p>
-            ) : (
-              <ol className="mt-4 flex flex-col gap-3">
-                {questoesDoBloco.map((questao, indice) => (
-                  <li key={questao.id} className="border border-line p-3">
-                    {editandoQuestao === questao.id ? (
-                      <FormularioQuestao
-                        questao={questao}
-                        indice={indice + 1}
-                        onSalvo={() => setEditandoQuestao(null)}
-                        onCancelar={() => setEditandoQuestao(null)}
-                      />
-                    ) : (
-                      <QuestaoConferencia
-                        indice={indice + 1}
-                        enunciado={questao.enunciado}
-                        resposta={questao.resposta}
-                        extra={
-                          <button type="button" className="btn shrink-0" onClick={() => setEditandoQuestao(questao.id)}>
-                            Editar
-                          </button>
-                        }
-                      />
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
-        </dialog>
-      ) : null}
+      <dialog
+        ref={questoesDialogo}
+        className="popup"
+        aria-labelledby="titulo-popup-questoes"
+        onClose={() => setEditandoQuestao(null)}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <h2 id="titulo-popup-questoes" className="min-w-0 break-words font-serif text-xl sm:text-2xl">
+            Cards da página {paginaSegura}
+          </h2>
+          <button type="button" className="btn shrink-0" onClick={() => questoesDialogo.current?.close()}>
+            Fechar
+          </button>
+        </div>
+        <div className="max-h-[70dvh] overflow-auto px-4 py-4">
+          <p className="text-sm text-muted">
+            {cardsDaPagina.length} {cardsDaPagina.length === 1 ? "card" : "cards"} nesta página, {questoes.length} no PDF todo,
+            em {materia?.nome ?? "esta matéria"}.
+          </p>
+          {cardsDaPagina.length === 0 ? (
+            <p className="mt-4 text-muted">Esta página ainda não tem cards.</p>
+          ) : (
+            <ol className="mt-4 flex flex-col gap-3">
+              {cardsDaPagina.map((questao, indice) => (
+                <li key={questao.id} className="border border-line p-3">
+                  {editandoQuestao === questao.id ? (
+                    <FormularioQuestao
+                      questao={questao}
+                      indice={indice + 1}
+                      onSalvo={() => setEditandoQuestao(null)}
+                      onCancelar={() => setEditandoQuestao(null)}
+                    />
+                  ) : (
+                    <QuestaoConferencia
+                      indice={indice + 1}
+                      enunciado={resumoDoCard(questao.tipo, questao.enunciado, 400) || "(card só com imagem)"}
+                      resposta={questao.resposta || "(sem comentário)"}
+                      extra={
+                        <button type="button" className="btn shrink-0" onClick={() => setEditandoQuestao(questao.id)}>
+                          Editar
+                        </button>
+                      }
+                    />
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </dialog>
       </div>
     </div>
   );
@@ -2140,14 +2167,14 @@ function FormularioQuestao({
         void repo.questoes
           .atualizar(questao.id, { enunciado, resposta })
           .then(() => onSalvo())
-          .catch((falhaSalvar) => setFalha(mensagemErro(falhaSalvar, "Não foi possível salvar a questão.")))
+          .catch((falhaSalvar) => setFalha(mensagemErro(falhaSalvar, "Não foi possível salvar o card.")))
           .finally(() => setGuardando(false));
       }}
     >
-      <h3 className="font-serif text-xl">Editar questão {indice}</h3>
+      <h3 className="font-serif text-xl">Editar card {indice}</h3>
       <div>
         <label className="rotulo" htmlFor={`enunciado-${questao.id}`}>
-          Enunciado
+          {questao.tipo === "lacuna" ? "Texto (use {{ }} nas lacunas)" : "Frente"}
         </label>
         <textarea
           id={`enunciado-${questao.id}`}
@@ -2158,7 +2185,7 @@ function FormularioQuestao({
       </div>
       <div>
         <label className="rotulo" htmlFor={`resposta-${questao.id}`}>
-          Resposta
+          {questao.tipo === "lacuna" ? "Comentário (opcional)" : "Verso"}
         </label>
         <textarea
           id={`resposta-${questao.id}`}
@@ -2176,14 +2203,14 @@ function FormularioQuestao({
           Cancelar
         </button>
         <Confirmar
-          rotulo="Excluir questão"
+          rotulo="Excluir card"
           confirmar="Excluir"
           onConfirmar={async () => {
             try {
               await repo.questoes.remover(questao.id);
               onSalvo();
             } catch (falhaExcluir) {
-              setFalha(mensagemErro(falhaExcluir, "Não foi possível excluir a questão."));
+              setFalha(mensagemErro(falhaExcluir, "Não foi possível excluir o card."));
             }
           }}
         />

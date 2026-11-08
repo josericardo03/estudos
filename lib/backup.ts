@@ -5,7 +5,7 @@ import { ErroEstudo } from "./erros";
 const TABELAS = [
   "materias",
   "pdfs",
-  "blocos",
+
   "grifos",
   "postits",
   "questoes",

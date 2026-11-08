@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { mensagemErro } from "@/lib/erros";
-import { descreverFaixa } from "@/lib/faixa";
 import { repo } from "@/lib/repo";
-import { caminhoBloco, caminhoCaderno, caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import { caminhoCaderno, caminhoMateria, caminhoPdf } from "@/lib/rotas";
 import type { CorGrifo, Grifo, PostIt, Rect } from "@/lib/types";
 import { IMPORTANTE, PRIORIDADES } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
@@ -53,15 +52,14 @@ export function Caderno({
   const [erro, setErro] = useState<string | null>(null);
   const [baixando, setBaixando] = useState(false);
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const [materia, pdf, blocos, grifos, postits] = await Promise.all([
+    const [materia, pdf, grifos, postits] = await Promise.all([
       repo.materias.obter(materiaId),
       repo.pdfs.obter(pdfId),
-      repo.blocos.listarPorPdf(pdfId),
       repo.grifos.listarPorPdf(pdfId),
       repo.postits.listarPorPdf(pdfId),
     ]);
     if (!materia || !pdf || pdf.materiaId !== materia.id) return null;
-    return { materia, pdf, blocos, grifos, postits };
+    return { materia, pdf, grifos, postits };
   }, [materiaId, pdfId], null);
 
   if (!pronto) return <Abrindo texto="Abrindo o cadernão…" />;
@@ -74,26 +72,20 @@ export function Caderno({
   const grifos = dados.grifos.filter((grifo) => filtro === "todas" || grifo.cor === filtro);
 
   function montarSecoes(listaGrifos: Grifo[], listaPostits: PostIt[]) {
-    return [
-      ...caderno.blocos.map((bloco) => ({
-        id: bloco.id,
-        titulo: bloco.titulo,
-        detalhe: descreverFaixa(bloco.paginaInicio, bloco.paginaFim),
-        href: caminhoBloco(materiaId, pdfId, bloco.id),
-        pagina: bloco.paginaInicio,
-        grifos: listaGrifos.filter((grifo) => grifo.blocoId === bloco.id),
-        postits: listaPostits.filter((postit) => postit.blocoId === bloco.id),
-      })),
-      {
-        id: "soltos",
-        titulo: "Sem bloco",
-        detalhe: "Anotações em páginas que ainda não entraram numa faixa.",
-        href: null as string | null,
-        pagina: null as number | null,
-        grifos: listaGrifos.filter((grifo) => !grifo.blocoId),
-        postits: listaPostits.filter((postit) => !postit.blocoId),
-      },
-    ].filter((secao) => secao.id !== "soltos" || secao.grifos.length > 0 || secao.postits.length > 0);
+    const paginas = new Set<number>();
+    for (const grifo of listaGrifos) paginas.add(grifo.pagina);
+    for (const postit of listaPostits) paginas.add(postit.pagina);
+    return [...paginas]
+      .sort((a, b) => a - b)
+      .map((pagina) => ({
+        id: `pagina-${pagina}`,
+        titulo: `Página ${pagina}`,
+        detalhe: "",
+        href: caminhoPdf(materiaId, pdfId, pagina),
+        pagina,
+        grifos: listaGrifos.filter((grifo) => grifo.pagina === pagina),
+        postits: listaPostits.filter((postit) => postit.pagina === pagina),
+      }));
   }
 
   const secoes = montarSecoes(grifos, dados.postits);
@@ -205,12 +197,12 @@ export function Caderno({
               <div>
                 <h2 className={aoLado ? "font-serif text-2xl" : "font-serif text-3xl"}>{secao.titulo}</h2>
                 <p className="mt-1 text-sm text-muted">
-                  {secao.detalhe} · {totalNotas} {totalNotas === 1 ? "anotação registrada" : "anotações registradas"}
+                  {totalNotas} {totalNotas === 1 ? "anotação" : "anotações"}
                 </p>
               </div>
               {secao.href ? (
                 <Link href={secao.href} className="text-sm text-pine no-underline hover:underline">
-                  Abrir bloco
+                  Abrir a página
                 </Link>
               ) : null}
             </div>
@@ -273,7 +265,7 @@ export function Caderno({
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Cadernão</h1>
       <p className="mt-2 text-muted">{dados.pdf.nome}</p>
       <p className="mt-3 max-w-xl text-sm text-muted">
-        Os grifos e os post-its aparecem aqui agrupados pelo bloco. Clique numa marcação para abrir o ponto dela no PDF. O post-it fica acima ou abaixo das marcações conforme o ponto em que foi fixado na página.
+        Os grifos e os post-its aparecem aqui, página por página. Clique numa marcação para abrir o ponto dela no PDF. O post-it fica acima ou abaixo das marcações conforme o ponto em que foi fixado na página.
       </p>
       <div className="mt-4 flex flex-wrap gap-2">{filtros}</div>
       {erro ? <div className="mt-4"><Aviso texto={erro} /></div> : null}

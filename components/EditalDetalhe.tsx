@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { deCampoData, paraCampoData } from "@/lib/datas";
 import { porcentagem } from "@/lib/desempenho";
-import { coberturaDe, descreverProva, topicoCoberto } from "@/lib/edital";
+import { coberturaDe, descreverProva } from "@/lib/edital";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { caminhoBloco, caminhoMateria } from "@/lib/rotas";
-import type { Bloco, EditalTopico, Materia, PdfDoc } from "@/lib/types";
+import { caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import type { EditalTopico, Materia, PdfDoc } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "./ui";
 
@@ -19,14 +19,13 @@ export function EditalDetalhe({ editalId }: { editalId: string }) {
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
     const edital = await repo.editais.obter(editalId);
     if (!edital) return null;
-    const [materias, ligadas, topicos, blocos, pdfs] = await Promise.all([
+    const [materias, ligadas, topicos, pdfs] = await Promise.all([
       repo.materias.listar(),
       repo.editais.materias(edital.id),
       repo.topicos.listarPorEdital(edital.id),
-      repo.blocos.listarTodos(),
       repo.pdfs.listarTodos(),
     ]);
-    return { edital, materias, ligadas, topicos, blocos, pdfs };
+    return { edital, materias, ligadas, topicos, pdfs };
   }, [editalId], null);
 
   if (!pronto) return <Abrindo texto="Abrindo o edital…" />;
@@ -53,7 +52,7 @@ export function EditalDetalhe({ editalId }: { editalId: string }) {
   }
 
   const prova = descreverProva(dados.edital.dataProva);
-  const cobertura = coberturaDe(dados.topicos, dados.blocos);
+  const cobertura = coberturaDe(dados.topicos);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-10">
@@ -142,15 +141,16 @@ export function EditalDetalhe({ editalId }: { editalId: string }) {
           Tópicos do edital
         </h2>
         <p className="mt-2 text-sm text-muted">
-          Liste os tópicos da prova e o peso de cada um (1 a 5). Um tópico conta como coberto quando o bloco ligado a ele é
-          finalizado, ou quando você o marca à mão. O plano do dia usa os pesos e o que falta.
+          Cole aqui os tópicos do Guru Já ou do edital, com o peso de cada um (1 a 5). No leitor, cada card que você cria
+          escolhe um tópico, e o Desempenho mostra em quais você mais erra. Marque o tópico como estudado quando terminar;
+          se quiser, diga em qual PDF e páginas ele está.
         </p>
         {cobertura.fracao !== null ? (
           <div className="mt-4">
             <div className="flex items-baseline justify-between gap-3">
               <p className="font-serif text-4xl">{porcentagem(cobertura.fracao)}%</p>
               <p className="text-sm text-muted">
-                {cobertura.cobertos} de {cobertura.total} tópicos cobertos, pelo peso
+                {cobertura.cobertos} de {cobertura.total} tópicos estudados, pelo peso
               </p>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-line" aria-hidden>
@@ -163,13 +163,7 @@ export function EditalDetalhe({ editalId }: { editalId: string }) {
           materias={dados.materias.filter((materia) => dados.ligadas.includes(materia.id))}
           onErro={setErro}
         />
-        <Topicos
-          topicos={dados.topicos}
-          materias={dados.materias}
-          blocos={dados.blocos}
-          pdfs={dados.pdfs}
-          onErro={setErro}
-        />
+        <Topicos topicos={dados.topicos} materias={dados.materias} pdfs={dados.pdfs} onErro={setErro} />
       </section>
     </main>
   );
@@ -271,7 +265,7 @@ function NovosTopicos({
     <form onSubmit={adicionar} className="mt-6 grid gap-3">
       <div>
         <label className="rotulo" htmlFor="novos-topicos">
-          Adicionar tópicos (um por linha; pode colar a lista do edital)
+          Adicionar tópicos (um por linha; pode colar a lista inteira)
         </label>
         <textarea
           id="novos-topicos"
@@ -321,19 +315,16 @@ function NovosTopicos({
 function Topicos({
   topicos,
   materias,
-  blocos,
   pdfs,
   onErro,
 }: {
   topicos: EditalTopico[];
   materias: Materia[];
-  blocos: Bloco[];
   pdfs: PdfDoc[];
   onErro: (texto: string | null) => void;
 }) {
   if (topicos.length === 0) return <p className="mt-6 text-muted">Nenhum tópico ainda.</p>;
   const nomeDaMateria = new Map(materias.map((materia) => [materia.id, materia.nome]));
-  const blocoPorId = new Map(blocos.map((bloco) => [bloco.id, bloco]));
   const grupos = new Map<string, EditalTopico[]>();
   for (const topico of topicos) {
     const chave = topico.materiaId ?? "";
@@ -352,13 +343,7 @@ function Topicos({
               <LinhaTopico
                 key={topico.id}
                 topico={topico}
-                coberto={topicoCoberto(topico, blocoPorId)}
-                opcoesDeBloco={blocos.filter((bloco) => {
-                  if (!topico.materiaId) return true;
-                  return pdfs.find((pdf) => pdf.id === bloco.pdfId)?.materiaId === topico.materiaId;
-                })}
-                pdfs={pdfs}
-                blocoLigado={topico.blocoId ? blocoPorId.get(topico.blocoId) : undefined}
+                pdfsDoTopico={pdfs.filter((pdf) => !topico.materiaId || pdf.materiaId === topico.materiaId)}
                 onErro={onErro}
               />
             ))}
@@ -371,20 +356,20 @@ function Topicos({
 
 function LinhaTopico({
   topico,
-  coberto,
-  opcoesDeBloco,
-  pdfs,
-  blocoLigado,
+  pdfsDoTopico,
   onErro,
 }: {
   topico: EditalTopico;
-  coberto: boolean;
-  opcoesDeBloco: Bloco[];
-  pdfs: PdfDoc[];
-  blocoLigado?: Bloco;
+  pdfsDoTopico: PdfDoc[];
   onErro: (texto: string | null) => void;
 }) {
-  async function mudar(mudanca: Partial<Pick<EditalTopico, "peso" | "blocoId" | "feito">>) {
+  const [inicio, setInicio] = useState(topico.paginaInicio ? String(topico.paginaInicio) : "");
+  const [fim, setFim] = useState(topico.paginaFim ? String(topico.paginaFim) : "");
+  const pdf = pdfsDoTopico.find((item) => item.id === topico.pdfId);
+
+  async function mudar(
+    mudanca: Partial<Pick<EditalTopico, "peso" | "feito" | "pdfId" | "paginaInicio" | "paginaFim">>,
+  ) {
     onErro(null);
     try {
       await repo.topicos.atualizar(topico.id, mudanca);
@@ -392,11 +377,17 @@ function LinhaTopico({
       onErro(mensagemErro(falha, "Não foi possível atualizar o tópico."));
     }
   }
-  const pdfPorId = new Map(pdfs.map((pdf) => [pdf.id, pdf]));
-  const blocoComCaminho =
-    blocoLigado && pdfPorId.get(blocoLigado.pdfId)
-      ? caminhoBloco(pdfPorId.get(blocoLigado.pdfId)!.materiaId, blocoLigado.pdfId, blocoLigado.id)
-      : null;
+
+  function guardarPaginas() {
+    if (!topico.pdfId) return;
+    const de = Number(inicio);
+    const ate = Number(fim || inicio);
+    if (!inicio.trim()) {
+      void mudar({ paginaInicio: null, paginaFim: null });
+      return;
+    }
+    void mudar({ paginaInicio: de, paginaFim: ate });
+  }
 
   return (
     <li className="grid gap-2 py-3">
@@ -405,22 +396,21 @@ function LinhaTopico({
           className="mt-1.5 shrink-0"
           type="checkbox"
           checked={topico.feito}
-          aria-label={`Marcar “${topico.nome}” como feito`}
+          aria-label={`Marcar “${topico.nome}” como estudado`}
           onChange={(evento) => void mudar({ feito: evento.target.checked })}
         />
         <div className="min-w-0 flex-1">
-          <p className={`break-words ${coberto ? "text-muted line-through" : ""}`}>{topico.nome}</p>
-          {blocoLigado ? (
+          <p className={`break-words ${topico.feito ? "text-muted line-through" : ""}`}>{topico.nome}</p>
+          {pdf && topico.paginaInicio ? (
             <p className="mt-1 text-sm text-muted">
-              Bloco:{" "}
-              {blocoComCaminho ? (
-                <Link href={blocoComCaminho} className="text-pine no-underline hover:underline">
-                  {blocoLigado.titulo}
-                </Link>
-              ) : (
-                blocoLigado.titulo
-              )}{" "}
-              · {blocoLigado.status === "finalizado" ? "finalizado" : "em estudo"}
+              <Link
+                href={caminhoPdf(pdf.materiaId, pdf.id, topico.paginaInicio)}
+                className="text-pine no-underline hover:underline"
+              >
+                Abrir no PDF
+              </Link>{" "}
+              · {pdf.nome}, p. {topico.paginaInicio}
+              {topico.paginaFim && topico.paginaFim !== topico.paginaInicio ? `–${topico.paginaFim}` : ""}
             </p>
           ) : null}
         </div>
@@ -442,20 +432,50 @@ function LinhaTopico({
           </select>
         </label>
         <label className="flex min-w-0 items-center gap-2 text-sm text-muted">
-          Bloco
+          PDF
           <select
             className="campo min-w-0 max-w-56 py-1"
-            value={topico.blocoId ?? ""}
-            onChange={(evento) => void mudar({ blocoId: evento.target.value || null })}
+            value={topico.pdfId ?? ""}
+            onChange={(evento) => {
+              setInicio("");
+              setFim("");
+              void mudar({ pdfId: evento.target.value || null });
+            }}
           >
             <option value="">Nenhum</option>
-            {opcoesDeBloco.map((bloco) => (
-              <option key={bloco.id} value={bloco.id}>
-                {bloco.titulo}
+            {pdfsDoTopico.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.nome}
               </option>
             ))}
           </select>
         </label>
+        {topico.pdfId ? (
+          <span className="flex items-center gap-2 text-sm text-muted">
+            Páginas
+            <input
+              className="campo w-16 py-1"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              aria-label="Página inicial"
+              value={inicio}
+              onChange={(evento) => setInicio(evento.target.value)}
+              onBlur={guardarPaginas}
+            />
+            a
+            <input
+              className="campo w-16 py-1"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              aria-label="Página final"
+              value={fim}
+              onChange={(evento) => setFim(evento.target.value)}
+              onBlur={guardarPaginas}
+            />
+          </span>
+        ) : null}
       </div>
     </li>
   );

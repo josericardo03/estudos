@@ -76,7 +76,7 @@ export function Cabecalho() {
               {link.href === "/hoje" && vencidas > 0 ? (
                 <span className="ml-1.5 rounded-full bg-alta px-1.5 py-0.5 text-[0.68rem] leading-none text-white">
                   {vencidas > 99 ? "99+" : vencidas}
-                  <span className="sr-only"> questões vencidas</span>
+                  <span className="sr-only"> cards vencidos</span>
                 </span>
               ) : null}
             </Link>

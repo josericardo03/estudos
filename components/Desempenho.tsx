@@ -6,7 +6,7 @@ import { formatarData } from "@/lib/datas";
 import { montarDesempenho, porcentagem, type GrupoDesempenho, type GrupoMateria } from "@/lib/desempenho";
 import { mensagemErro } from "@/lib/erros";
 import { repo } from "@/lib/repo";
-import { caminhoBanco, caminhoBloco, caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import { caminhoBanco, caminhoMateria, caminhoPdf } from "@/lib/rotas";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar } from "./ui";
 
@@ -72,7 +72,7 @@ function LinhaMateria({ grupo }: { grupo: GrupoMateria }) {
         </p>
       </div>
       {grupo.taxa === null ? (
-        <p className="mt-2 text-sm text-muted">Nenhuma questão feita ainda.</p>
+        <p className="mt-2 text-sm text-muted">Nenhum card revisado ainda.</p>
       ) : (
         <>
           <Barra taxa={grupo.taxa} />
@@ -113,10 +113,10 @@ export function Desempenho() {
   const [guardando, setGuardando] = useState(false);
 
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
-    const [materias, pdfs, blocos, questoes, tentativas, lancamentos] = await Promise.all([
+    const [materias, pdfs, topicos, questoes, tentativas, lancamentos] = await Promise.all([
       repo.materias.listar(),
       repo.pdfs.listarTodos(),
-      repo.blocos.listarTodos(),
+      repo.topicos.listarTodos(),
       repo.questoes.listarTodas(),
       repo.tentativas.listar(),
       repo.lancamentos.listar(),
@@ -127,13 +127,13 @@ export function Desempenho() {
       resumo: montarDesempenho({
         materias,
         pdfs: pdfs.map(({ id, nome, materiaId: dono }) => ({ id, nome, materiaId: dono })),
-        blocos,
+        topicos,
         questoes,
         tentativas,
         lancamentos,
         caminhoMateria,
         caminhoPdf,
-        caminhoBloco,
+        caminhoTopico: (editalId: string) => `/editais/${editalId}`,
       }),
     };
   }, [], null);
@@ -172,7 +172,7 @@ export function Desempenho() {
       <p className="olho">Acompanhamento</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Desempenho</h1>
       <p className="mt-3 max-w-xl text-muted">
-        A média sai das questões que você escreveu e julgou aqui e das questões que você lança de fora, como as do Tec
+        A média sai dos cards que você revisou aqui e das questões que você lança de fora, como as do Tec
         Concursos. Tentativas recentes pesam mais que as antigas na ordem dos mais fracos.
       </p>
 
@@ -192,7 +192,7 @@ export function Desempenho() {
           <p className="mt-1 text-sm text-muted">{resumo.semana.tentativas} no app</p>
         </article>
         <article className="cartao p-4">
-          <p className="text-sm text-muted">Questões julgadas no app</p>
+          <p className="text-sm text-muted">Cards revisados no app</p>
           <p className="mt-2 font-serif text-4xl">
             {resumo.julgadas}
             <span className="text-2xl text-muted">/{resumo.questoesNoBanco}</span>
@@ -205,7 +205,7 @@ export function Desempenho() {
 
       {resumo.questoesNoBanco === 0 && resumo.externas.feitas === 0 ? (
         <p className="mt-10 text-muted">
-          Nenhuma questão no banco. Elas entram quando você salva uma questão num bloco.
+          Nenhum card ainda. Eles nascem no leitor, a partir de um trecho que você seleciona.
         </p>
       ) : resumo.tentativas === 0 ? (
         <p className="mt-8 text-muted">
@@ -388,7 +388,7 @@ export function Desempenho() {
                   Errou com certeza {questao.certezaErrada} {questao.certezaErrada === 1 ? "vez" : "vezes"}.
                 </p>
                 <Link href={questao.href} className="mt-2 inline-block text-sm text-pine no-underline hover:underline">
-                  Abrir bloco
+                  Abrir no material
                 </Link>
               </li>
             ))}
@@ -410,12 +410,28 @@ export function Desempenho() {
         )}
       </section>
 
-      {resumo.blocos.length > 0 ? (
+      {resumo.topicos.length > 0 ? (
         <section className="mt-10">
-          <h2 className="font-serif text-3xl">Blocos mais fracos</h2>
-          <p className="mt-2 text-sm text-muted">A faixa de páginas em que a média está mais baixa.</p>
+          <h2 className="font-serif text-3xl">Tópicos do edital</h2>
+          <p className="mt-2 text-sm text-muted">
+            Onde você mais erra, na ordem da prova. É o que leva direto de volta ao seu planejamento.
+          </p>
           <ul className="cartao mt-4 px-4 py-4">
-            {resumo.blocos.map((grupo) => (
+            {resumo.topicos.map((grupo) => (
+              <LinhaGrupo key={grupo.id} grupo={grupo} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {resumo.trechos.length > 0 ? (
+        <section className="mt-10">
+          <h2 className="font-serif text-3xl">Trechos do PDF</h2>
+          <p className="mt-2 text-sm text-muted">
+            Faixas de 10 páginas em que a média está mais baixa. Clique para reler o trecho.
+          </p>
+          <ul className="cartao mt-4 px-4 py-4">
+            {resumo.trechos.map((grupo) => (
               <LinhaGrupo key={grupo.id} grupo={grupo} />
             ))}
           </ul>
@@ -440,7 +456,7 @@ export function Desempenho() {
                   {questao.erros === 1 ? "erro" : "erros"}
                 </p>
                 <Link href={questao.href} className="mt-2 inline-block text-sm text-pine no-underline hover:underline">
-                  Abrir bloco
+                  Abrir no material
                 </Link>
               </li>
             ))}

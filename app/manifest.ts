@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Foco · estudo por blocos",
+    name: "Foco · estudo",
     short_name: "Foco",
-    description: "Leitor de PDF com grifos, cadernão, banco de questões e revisão espaçada.",
+    description: "Leitor de PDF com grifos, cards de lacuna e revisão espaçada.",
     start_url: "/hoje",
     scope: "/",
     display: "standalone",

@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     default: "Foco",
     template: "%s · Foco",
   },
-  description: "Estudo por blocos, cadernão e banco de questões.",
+  description: "Leitor de PDF, grifos e cards com revisão espaçada.",
   appleWebApp: { capable: true, title: "Foco", statusBarStyle: "default" },
 };
 

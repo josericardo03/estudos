@@ -15,10 +15,6 @@ export function caminhoCaderno(materiaId: string, pdfId: string) {
   return `/materias/${materiaId}/pdfs/${pdfId}/caderno`;
 }
 
-export function caminhoBloco(materiaId: string, pdfId: string, blocoId: string) {
-  return `/materias/${materiaId}/pdfs/${pdfId}/blocos/${blocoId}`;
-}
-
 export function caminhoDesempenho() {
   return "/desempenho";
 }

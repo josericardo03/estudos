@@ -1,5 +1,5 @@
 import { diasEntre } from "./datas";
-import type { Bloco, Edital, EditalMateria, EditalTopico } from "./types";
+import type { Edital, EditalMateria, EditalTopico } from "./types";
 
 export function diasAteProva(dataProva: number | null | undefined, agora = Date.now()) {
   if (!dataProva) return null;
@@ -17,12 +17,6 @@ export function descreverProva(dataProva: number | null | undefined, agora = Dat
   return `Faltam ${dias} dias (${semanas} semanas)`;
 }
 
-export function topicoCoberto(topico: EditalTopico, blocos: Map<string, Bloco>) {
-  if (topico.feito) return true;
-  if (!topico.blocoId) return false;
-  return blocos.get(topico.blocoId)?.status === "finalizado";
-}
-
 export type Cobertura = {
   total: number;
   cobertos: number;
@@ -32,14 +26,14 @@ export type Cobertura = {
   fracao: number | null;
 };
 
-export function coberturaDe(topicos: EditalTopico[], blocos: Bloco[]): Cobertura {
-  const porId = new Map(blocos.map((bloco) => [bloco.id, bloco]));
+/** Cobertura do edital: os tópicos que você marcou como estudados, pelo peso. */
+export function coberturaDe(topicos: EditalTopico[]): Cobertura {
   let cobertos = 0;
   let pesoTotal = 0;
   let pesoCoberto = 0;
   for (const topico of topicos) {
     pesoTotal += topico.peso;
-    if (topicoCoberto(topico, porId)) {
+    if (topico.feito) {
       cobertos += 1;
       pesoCoberto += topico.peso;
     }

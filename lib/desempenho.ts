@@ -1,5 +1,6 @@
+import { resumoDoCard } from "./cards";
 import { nomeDoMotivo } from "./types";
-import type { Bloco, Confianca, Lancamento, Materia, MotivoErro, Questao, Tentativa } from "./types";
+import type { Confianca, EditalTopico, Lancamento, Materia, MotivoErro, Questao, Tentativa } from "./types";
 import { CONFIANCAS } from "./types";
 
 export type GrupoDesempenho = {
@@ -52,6 +53,8 @@ const MEIA_VIDA_DIAS = 30;
 /** Suavização: sem dados, a força parte de 60%; poucos dados mal movem o número. */
 const PRIOR_ACERTOS = 1.2;
 const PRIOR_TOTAL = 2;
+/** Quantas páginas formam um "trecho" na análise por PDF. */
+export const PAGINAS_POR_TRECHO = 10;
 
 export function porcentagem(taxa: number) {
   return Math.round(taxa * 100);
@@ -93,10 +96,11 @@ function compararFraqueza(a: GrupoDesempenho, b: GrupoDesempenho) {
   return a.forca - b.forca || b.erros - a.erros || a.nome.localeCompare(b.nome, "pt-BR");
 }
 
-function agrupar<T>(itens: T[], chave: (item: T) => string) {
+function agrupar<T>(itens: T[], chave: (item: T) => string | null) {
   const mapa = new Map<string, T[]>();
   for (const item of itens) {
     const k = chave(item);
+    if (k === null) continue;
     const lista = mapa.get(k);
     if (lista) lista.push(item);
     else mapa.set(k, [item]);
@@ -130,28 +134,32 @@ function resumirGrupo(
   };
 }
 
+function inicioDoTrecho(pagina: number) {
+  return Math.floor((pagina - 1) / PAGINAS_POR_TRECHO) * PAGINAS_POR_TRECHO + 1;
+}
+
 export function montarDesempenho(entrada: {
   materias: Materia[];
   pdfs: PdfResumo[];
-  blocos: Bloco[];
+  topicos: EditalTopico[];
   questoes: Questao[];
   tentativas: Tentativa[];
   lancamentos?: Lancamento[];
   agora?: number;
   caminhoMateria: (materiaId: string) => string;
-  caminhoPdf: (materiaId: string, pdfId: string) => string;
-  caminhoBloco: (materiaId: string, pdfId: string, blocoId: string) => string;
+  caminhoPdf: (materiaId: string, pdfId: string, pagina?: number) => string;
+  caminhoTopico: (editalId: string) => string;
 }) {
   const agora = entrada.agora ?? Date.now();
   const lancamentos = entrada.lancamentos ?? [];
   const materiaDe = new Map(entrada.materias.map((materia) => [materia.id, materia.nome]));
   const pdfDe = new Map(entrada.pdfs.map((pdf) => [pdf.id, pdf]));
-  const blocoDe = new Map(entrada.blocos.map((bloco) => [bloco.id, bloco]));
+  const topicoDe = new Map(entrada.topicos.map((topico) => [topico.id, topico]));
 
   const questoesPorPdf = agrupar(entrada.questoes, (item) => item.pdfId);
-  const questoesPorBloco = agrupar(entrada.questoes, (item) => item.blocoId);
+  const questoesPorTopico = agrupar(entrada.questoes, (item) => item.topicoId);
   const tentativasPorPdf = agrupar(entrada.tentativas, (item) => item.pdfId);
-  const tentativasPorBloco = agrupar(entrada.tentativas, (item) => item.blocoId);
+  const tentativasPorTopico = agrupar(entrada.tentativas, (item) => item.topicoId);
   const tentativasPorQuestao = agrupar(entrada.tentativas, (item) => item.questaoId);
   const tentativasPorMateria = agrupar(entrada.tentativas, (item) => item.materiaId);
   const lancamentosPorMateria = agrupar(lancamentos, (item) => item.materiaId);
@@ -171,20 +179,49 @@ export function montarDesempenho(entrada: {
     .filter((grupo) => grupo.questoes > 0)
     .sort(compararFraqueza);
 
-  const blocos = entrada.blocos
-    .map((bloco) => {
-      const pdf = pdfDe.get(bloco.pdfId);
-      return resumirGrupo(
-        bloco.id,
-        bloco.titulo,
-        pdf ? `${pdf.nome} · ${materiaDe.get(pdf.materiaId) ?? "Matéria"}` : "PDF",
-        pdf ? entrada.caminhoBloco(pdf.materiaId, pdf.id, bloco.id) : "/",
-        questoesPorBloco.get(bloco.id)?.length ?? 0,
-        tentativasPorBloco.get(bloco.id) ?? [],
+  const topicos = entrada.topicos
+    .map((topico) =>
+      resumirGrupo(
+        topico.id,
+        topico.nome,
+        topico.materiaId ? (materiaDe.get(topico.materiaId) ?? "Matéria") : "Sem matéria",
+        entrada.caminhoTopico(topico.editalId),
+        questoesPorTopico.get(topico.id)?.length ?? 0,
+        tentativasPorTopico.get(topico.id) ?? [],
         agora,
-      );
+      ),
+    )
+    .filter((grupo) => grupo.questoes > 0)
+    .sort(compararFraqueza);
+
+  // Trechos: faixas de 10 páginas de um PDF onde os cards foram criados.
+  const cardsPorTrecho = new Map<string, number>();
+  for (const questao of entrada.questoes) {
+    if (!questao.pdfId || !questao.pagina) continue;
+    const chave = `${questao.pdfId}:${inicioDoTrecho(questao.pagina)}`;
+    cardsPorTrecho.set(chave, (cardsPorTrecho.get(chave) ?? 0) + 1);
+  }
+  const tentativasPorTrecho = agrupar(entrada.tentativas, (item) =>
+    item.pdfId && item.pagina ? `${item.pdfId}:${inicioDoTrecho(item.pagina)}` : null,
+  );
+  const trechos = [...tentativasPorTrecho.entries()]
+    .flatMap(([chave, lista]) => {
+      const [pdfId, inicioTexto] = chave.split(":");
+      const pdf = pdfDe.get(pdfId);
+      if (!pdf) return [];
+      const inicio = Number(inicioTexto);
+      return [
+        resumirGrupo(
+          chave,
+          `${pdf.nome} · p. ${inicio}–${inicio + PAGINAS_POR_TRECHO - 1}`,
+          materiaDe.get(pdf.materiaId) ?? "Matéria",
+          entrada.caminhoPdf(pdf.materiaId, pdf.id, inicio),
+          cardsPorTrecho.get(chave) ?? 0,
+          lista,
+          agora,
+        ),
+      ];
     })
-    .filter((grupo) => grupo.tentativas > 0)
     .sort(compararFraqueza);
 
   const materias = entrada.materias
@@ -221,17 +258,20 @@ export function montarDesempenho(entrada: {
   const comErro: QuestaoFraca[] = [];
   for (const questao of entrada.questoes) {
     const daQuestao = tentativasPorQuestao.get(questao.id);
-    const pdf = pdfDe.get(questao.pdfId);
-    if (!daQuestao?.length || !pdf) continue;
+    if (!daQuestao?.length) continue;
     const acertos = daQuestao.filter((item) => item.acertou).length;
     const erros = daQuestao.length - acertos;
     if (erros === 0) continue;
-    const bloco = blocoDe.get(questao.blocoId);
+    const pdf = questao.pdfId ? pdfDe.get(questao.pdfId) : undefined;
+    const topico = questao.topicoId ? topicoDe.get(questao.topicoId) : undefined;
+    const origem = pdf
+      ? `${pdf.nome}${questao.pagina ? ` · p. ${questao.pagina}` : ""}`
+      : (materiaDe.get(questao.materiaId) ?? "Matéria");
     comErro.push({
       id: questao.id,
-      enunciado: questao.enunciado,
-      href: entrada.caminhoBloco(pdf.materiaId, pdf.id, questao.blocoId),
-      detalhe: `${pdf.nome}${bloco ? ` · ${bloco.titulo}` : ""}`,
+      enunciado: resumoDoCard(questao.tipo, questao.enunciado, 200),
+      href: pdf ? entrada.caminhoPdf(pdf.materiaId, pdf.id, questao.pagina ?? undefined) : entrada.caminhoMateria(questao.materiaId),
+      detalhe: topico ? `${origem} · ${topico.nome}` : origem,
       acertos,
       erros,
       taxa: acertos / daQuestao.length,
@@ -281,7 +321,8 @@ export function montarDesempenho(entrada: {
 
   return {
     pdfs,
-    blocos: blocos.slice(0, 8),
+    topicos: topicos.slice(0, 10),
+    trechos: trechos.slice(0, 8),
     materias,
     questoes,
     pontosCegos,

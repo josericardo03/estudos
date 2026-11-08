@@ -1,11 +1,10 @@
-import { chaveDia, dataDaChave, somarDias } from "./datas";
+import { prepararCard } from "./cards";
+import { chaveDia, dataDaChave } from "./datas";
 import { ErroEstudo } from "./erros";
-import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
-import { garantirMigracao } from "./migrar";
+import { validarFaixa } from "./faixa";
 import { avisarMudanca } from "./mudancas";
 import { supabase } from "./supabase";
 import type {
-  Bloco,
   Confianca,
   CorGrifo,
   Edital,
@@ -21,11 +20,10 @@ import type {
   PostIt,
   Questao,
   Rect,
-  StatusBloco,
   StatusRevisao,
   Tentativa,
+  TipoCard,
 } from "./types";
-import { MAX_QUESTOES } from "./types";
 
 type LinhaMateria = { id: string; nome: string; created_at: string };
 type LinhaPdf = {
@@ -34,24 +32,13 @@ type LinhaPdf = {
   nome: string;
   storage_path: string;
   num_pages: number;
-  created_at: string;
-};
-type LinhaBloco = {
-  id: string;
-  pdf_id: string;
-  titulo: string;
-  pagina_inicio: number;
-  pagina_fim: number;
-  status: StatusBloco;
-  resumo: string | null;
-  proxima_revisao_em: string | null;
-  revisoes: number | null;
+  ultima_pagina: number | null;
+  maior_pagina: number | null;
   created_at: string;
 };
 type LinhaGrifo = {
   id: string;
   pdf_id: string;
-  bloco_id: string | null;
   pagina: number;
   texto: string;
   cor: CorGrifo;
@@ -62,7 +49,6 @@ type LinhaGrifo = {
 type LinhaPostit = {
   id: string;
   pdf_id: string;
-  bloco_id: string | null;
   pagina: number;
   texto: string;
   x: number;
@@ -71,11 +57,15 @@ type LinhaPostit = {
 };
 type LinhaQuestao = {
   id: string;
-  bloco_id: string;
   materia_id: string;
-  pdf_id: string;
+  pdf_id: string | null;
+  pagina: number | null;
+  topico_id: string | null;
+  tipo: TipoCard;
   enunciado: string;
   resposta: string;
+  imagem_path: string | null;
+  suspensa: boolean;
   status_revisao: StatusRevisao;
   sequencia: number;
   facilidade: number | null;
@@ -86,9 +76,10 @@ type LinhaQuestao = {
 type LinhaTentativa = {
   id: string;
   questao_id: string;
-  pdf_id: string;
   materia_id: string;
-  bloco_id: string;
+  pdf_id: string | null;
+  topico_id: string | null;
+  pagina: number | null;
   acertou: boolean;
   nota: number | null;
   confianca: number | null;
@@ -103,7 +94,9 @@ type LinhaTopico = {
   materia_id: string | null;
   nome: string;
   peso: number;
-  bloco_id: string | null;
+  pdf_id: string | null;
+  pagina_inicio: number | null;
+  pagina_fim: number | null;
   feito: boolean;
   created_at: string;
 };
@@ -116,6 +109,14 @@ type LinhaLancamento = {
   em: string;
 };
 type LinhaEstudo = { id: string; materia_id: string | null; segundos: number; em: string };
+
+type AgendaCard = {
+  sequencia: number;
+  proximaEm: number;
+  statusRevisao: StatusRevisao;
+  facilidade: number;
+  intervaloDias: number;
+};
 
 const cachePdf = new Map<string, Blob>();
 const cacheMarca = new Map<string, Blob>();
@@ -213,6 +214,19 @@ function limitar(valor: number, minimo: number, maximo: number) {
   return Math.min(maximo, Math.max(minimo, valor));
 }
 
+function limitarPeso(peso: number) {
+  if (!Number.isFinite(peso)) return 3;
+  return Math.min(5, Math.max(1, Math.round(peso)));
+}
+
+function validarLancamento(feitas: number, acertos: number) {
+  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
+    throw new ErroEstudo("Use números inteiros.");
+  }
+  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
+  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
+}
+
 function iso(ms: number) {
   return new Date(ms).toISOString();
 }
@@ -231,7 +245,7 @@ function checar(error: { message: string } | null, fallback: string) {
   if (!error) return;
   const texto = error.message;
   if (/row-level security|permission denied|invalid api key|jwt/i.test(texto)) {
-    throw new ErroEstudo("O Supabase recusou o acesso. Confira se o schema.sql terminou sem erro.");
+    throw new ErroEstudo("O Supabase recusou o acesso. Entre de novo ou confira se o schema.sql terminou sem erro.");
   }
   if (/bucket not found/i.test(texto)) {
     throw new ErroEstudo("Falta o espaço de arquivos pdfs ou marcas. Rode o schema.sql até o fim.");
@@ -241,10 +255,6 @@ function checar(error: { message: string } | null, fallback: string) {
 
 function porNome<T extends { nome: string }>(lista: T[]) {
   return lista.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
-}
-
-function ordenarBlocos(lista: Bloco[]) {
-  return lista.sort((a, b) => a.paginaInicio - b.paginaInicio || a.createdAt - b.createdAt);
 }
 
 function materiaDe(linha: LinhaMateria): Materia {
@@ -257,24 +267,10 @@ function pdfDe(linha: LinhaPdf, blob?: Blob): PdfDoc {
     materiaId: linha.materia_id,
     nome: linha.nome,
     numPages: linha.num_pages,
+    ...(linha.ultima_pagina != null ? { ultimaPagina: linha.ultima_pagina } : {}),
+    ...(linha.maior_pagina != null ? { maiorPagina: linha.maior_pagina } : {}),
     createdAt: epocaObrigatoria(linha.created_at),
     ...(blob ? { blob } : {}),
-  };
-}
-
-function blocoDe(linha: LinhaBloco): Bloco {
-  const proximaRevisaoEm = epoca(linha.proxima_revisao_em);
-  return {
-    id: linha.id,
-    pdfId: linha.pdf_id,
-    titulo: linha.titulo,
-    paginaInicio: linha.pagina_inicio,
-    paginaFim: linha.pagina_fim,
-    status: linha.status,
-    ...(linha.resumo ? { resumo: linha.resumo } : {}),
-    ...(proximaRevisaoEm != null ? { proximaRevisaoEm } : {}),
-    ...(linha.revisoes != null ? { revisoes: linha.revisoes } : {}),
-    createdAt: epocaObrigatoria(linha.created_at),
   };
 }
 
@@ -282,7 +278,6 @@ function grifoDe(linha: LinhaGrifo, imagem?: Blob): Grifo {
   return {
     id: linha.id,
     pdfId: linha.pdf_id,
-    blocoId: linha.bloco_id,
     pagina: linha.pagina,
     texto: linha.texto,
     cor: linha.cor,
@@ -296,7 +291,6 @@ function postitDe(linha: LinhaPostit): PostIt {
   return {
     id: linha.id,
     pdfId: linha.pdf_id,
-    blocoId: linha.bloco_id,
     pagina: linha.pagina,
     texto: linha.texto,
     x: linha.x,
@@ -305,15 +299,19 @@ function postitDe(linha: LinhaPostit): PostIt {
   };
 }
 
-function questaoDe(linha: LinhaQuestao): Questao {
+function questaoDe(linha: LinhaQuestao, imagem?: Blob): Questao {
   const proximaEm = epoca(linha.proxima_em);
   return {
     id: linha.id,
-    blocoId: linha.bloco_id,
     materiaId: linha.materia_id,
     pdfId: linha.pdf_id,
+    pagina: linha.pagina,
+    topicoId: linha.topico_id,
+    tipo: linha.tipo ?? "basico",
     enunciado: linha.enunciado,
-    resposta: linha.resposta,
+    resposta: linha.resposta ?? "",
+    ...(imagem ? { imagem } : {}),
+    suspensa: Boolean(linha.suspensa),
     statusRevisao: linha.status_revisao,
     sequencia: linha.sequencia ?? 0,
     ...(linha.facilidade != null ? { facilidade: linha.facilidade } : {}),
@@ -327,9 +325,10 @@ function tentativaDe(linha: LinhaTentativa): Tentativa {
   return {
     id: linha.id,
     questaoId: linha.questao_id,
-    pdfId: linha.pdf_id,
     materiaId: linha.materia_id,
-    blocoId: linha.bloco_id,
+    pdfId: linha.pdf_id,
+    topicoId: linha.topico_id,
+    pagina: linha.pagina,
     acertou: linha.acertou,
     em: epocaObrigatoria(linha.em),
     ...(linha.nota != null ? { nota: linha.nota as Nota } : {}),
@@ -359,7 +358,9 @@ function topicoDe(linha: LinhaTopico): EditalTopico {
     materiaId: linha.materia_id,
     nome: linha.nome,
     peso: linha.peso,
-    blocoId: linha.bloco_id,
+    pdfId: linha.pdf_id,
+    paginaInicio: linha.pagina_inicio,
+    paginaFim: linha.pagina_fim,
     feito: linha.feito,
     createdAt: epocaObrigatoria(linha.created_at),
   };
@@ -383,19 +384,6 @@ function estudoDe(linha: LinhaEstudo): Estudo {
     segundos: linha.segundos,
     em: epocaObrigatoria(linha.em),
   };
-}
-
-function limitarPeso(peso: number) {
-  if (!Number.isFinite(peso)) return 3;
-  return Math.min(5, Math.max(1, Math.round(peso)));
-}
-
-function validarLancamento(feitas: number, acertos: number) {
-  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
-    throw new ErroEstudo("Use números inteiros.");
-  }
-  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
-  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
 }
 
 async function baixar(bucket: "pdfs" | "marcas", caminho: string, cache: Map<string, Blob>, fallback: string) {
@@ -423,45 +411,24 @@ async function baixar(bucket: "pdfs" | "marcas", caminho: string, cache: Map<str
   return data;
 }
 
+async function imagemOuNada(caminho: string | null) {
+  if (!caminho) return undefined;
+  try {
+    return await baixar("marcas", caminho, cacheMarca, "Não foi possível abrir a imagem.");
+  } catch {
+    return undefined;
+  }
+}
+
 async function comImagens(linhas: LinhaGrifo[]) {
-  return Promise.all(
-    linhas.map(async (linha) => {
-      if (!linha.imagem_path) return grifoDe(linha);
-      try {
-        const imagem = await baixar("marcas", linha.imagem_path, cacheMarca, "Não foi possível abrir a marcação.");
-        return grifoDe(linha, imagem);
-      } catch {
-        return grifoDe(linha);
-      }
-    }),
-  );
+  return Promise.all(linhas.map(async (linha) => grifoDe(linha, await imagemOuNada(linha.imagem_path))));
 }
 
-async function sincronizarAnotacoes(pdfId: string) {
-  const blocos = await repoRemoto.blocos.listarPorPdf(pdfId);
-  const { data: grifos, error: erroGrifos } = await supabase().from("grifos").select("*").eq("pdf_id", pdfId);
-  checar(erroGrifos, "Não foi possível atualizar os grifos.");
-  const { data: postits, error: erroPostits } = await supabase().from("postits").select("*").eq("pdf_id", pdfId);
-  checar(erroPostits, "Não foi possível atualizar os post-its.");
-  const linhasGrifo = (grifos ?? []) as LinhaGrifo[];
-  const linhasPostit = (postits ?? []) as LinhaPostit[];
-  await Promise.all([
-    ...linhasGrifo.map(async (grifo) => {
-      const blocoId = blocoDaPagina(blocos, grifo.pagina)?.id ?? null;
-      if (grifo.bloco_id === blocoId) return;
-      const { error } = await supabase().from("grifos").update({ bloco_id: blocoId }).eq("id", grifo.id);
-      checar(error, "Não foi possível atualizar os grifos.");
-    }),
-    ...linhasPostit.map(async (postit) => {
-      const blocoId = blocoDaPagina(blocos, postit.pagina)?.id ?? null;
-      if (postit.bloco_id === blocoId) return;
-      const { error } = await supabase().from("postits").update({ bloco_id: blocoId }).eq("id", postit.id);
-      checar(error, "Não foi possível atualizar os post-its.");
-    }),
-  ]);
+async function cardsComImagens(linhas: LinhaQuestao[]) {
+  return Promise.all(linhas.map(async (linha) => questaoDe(linha, await imagemOuNada(linha.imagem_path))));
 }
 
-async function caminhosDasMarcas(pdfIds: string[]) {
+async function caminhosDeMarcasDosPdfs(pdfIds: string[]) {
   if (!pdfIds.length) return [];
   const { data, error } = await supabase().from("grifos").select("imagem_path").in("pdf_id", pdfIds);
   checar(error, "Não foi possível ler as marcações.");
@@ -470,22 +437,35 @@ async function caminhosDasMarcas(pdfIds: string[]) {
     .filter((caminho): caminho is string => Boolean(caminho));
 }
 
+async function caminhosDeImagensDeCards(materiaId: string) {
+  const { data, error } = await supabase()
+    .from("questoes")
+    .select("imagem_path")
+    .eq("materia_id", materiaId)
+    .not("imagem_path", "is", null);
+  checar(error, "Não foi possível ler as imagens dos cards.");
+  return ((data ?? []) as { imagem_path: string | null }[])
+    .map((linha) => linha.imagem_path)
+    .filter((caminho): caminho is string => Boolean(caminho));
+}
+
+function ordenarCards(lista: Questao[]) {
+  return lista.sort((a, b) => a.createdAt - b.createdAt);
+}
+
 export const repoRemoto = {
   materias: {
     async listar(): Promise<Materia[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("materias").select("*");
       checar(error, "Não foi possível ler as matérias.");
       return porNome(((data ?? []) as LinhaMateria[]).map(materiaDe));
     },
     async obter(idMateria: string): Promise<Materia | null> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("materias").select("*").eq("id", idMateria).maybeSingle();
       checar(error, "Não foi possível ler a matéria.");
       return data ? materiaDe(data as LinhaMateria) : null;
     },
     async criar(nome: string): Promise<Materia> {
-      await garantirMigracao();
       const materia: Materia = {
         id: novoId(),
         nome: exigirNome(nome, "Dê um nome à matéria."),
@@ -501,7 +481,6 @@ export const repoRemoto = {
       return materia;
     },
     async renomear(idMateria: string, nome: string) {
-      await garantirMigracao();
       const limpo = exigirNome(nome, "Dê um nome à matéria.");
       const { data, error } = await supabase()
         .from("materias")
@@ -513,14 +492,16 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async remover(idMateria: string) {
-      await garantirMigracao();
       const { data: pdfs, error: erroPdfs } = await supabase()
         .from("pdfs")
         .select("id, storage_path")
         .eq("materia_id", idMateria);
       checar(erroPdfs, "Não foi possível excluir a matéria.");
       const linhas = (pdfs ?? []) as { id: string; storage_path: string }[];
-      const marcas = await caminhosDasMarcas(linhas.map((pdf) => pdf.id));
+      const marcas = [
+        ...(await caminhosDeMarcasDosPdfs(linhas.map((pdf) => pdf.id))),
+        ...(await caminhosDeImagensDeCards(idMateria)),
+      ];
       if (marcas.length) {
         const { error } = await supabase().storage.from("marcas").remove(marcas);
         checar(error, "Não foi possível excluir a matéria.");
@@ -543,7 +524,6 @@ export const repoRemoto = {
 
   pdfs: {
     async listarTodos(): Promise<PdfDoc[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("pdfs").select("*");
       checar(error, "Não foi possível ler os PDFs.");
       return ((data ?? []) as LinhaPdf[])
@@ -551,7 +531,6 @@ export const repoRemoto = {
         .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
     },
     async listarPorMateria(materiaId: string): Promise<PdfDoc[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("pdfs").select("*").eq("materia_id", materiaId);
       checar(error, "Não foi possível ler os PDFs.");
       return ((data ?? []) as LinhaPdf[])
@@ -559,7 +538,6 @@ export const repoRemoto = {
         .sort((a, b) => a.createdAt - b.createdAt);
     },
     async obter(pdfId: string, opcoes?: { arquivo?: boolean }): Promise<PdfDoc | null> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("pdfs").select("*").eq("id", pdfId).maybeSingle();
       checar(error, "Não foi possível abrir o PDF.");
       if (!data) return null;
@@ -569,7 +547,6 @@ export const repoRemoto = {
       return pdfDe(linha, blob);
     },
     async criar(entrada: { materiaId: string; nome: string; blob: Blob; numPages: number }): Promise<PdfDoc> {
-      await garantirMigracao();
       const materia = await repoRemoto.materias.obter(entrada.materiaId);
       if (!materia) throw new ErroEstudo("Matéria não encontrada.");
       if (entrada.numPages < 1) throw new ErroEstudo("Este PDF não tem páginas.");
@@ -605,22 +582,36 @@ export const repoRemoto = {
       return pdf;
     },
     async renomear(pdfId: string, nome: string) {
-      await garantirMigracao();
       const limpo = exigirNome(nome, "O PDF precisa de um nome.");
       const { data, error } = await supabase().from("pdfs").update({ nome: limpo }).eq("id", pdfId).select("id");
       checar(error, "Não foi possível renomear o PDF.");
       if (!data?.length) throw new ErroEstudo("PDF não encontrado.");
       avisarMudanca();
     },
+    async registrarLeitura(pdfId: string, pagina: number) {
+      const { data, error } = await supabase()
+        .from("pdfs")
+        .select("num_pages, maior_pagina")
+        .eq("id", pdfId)
+        .maybeSingle();
+      checar(error, "Não foi possível guardar a página.");
+      if (!data) return;
+      const linha = data as { num_pages: number; maior_pagina: number | null };
+      const ultima = limitar(Math.round(pagina), 1, linha.num_pages);
+      const resposta = await supabase()
+        .from("pdfs")
+        .update({ ultima_pagina: ultima, maior_pagina: Math.max(linha.maior_pagina ?? 0, ultima) })
+        .eq("id", pdfId);
+      checar(resposta.error, "Não foi possível guardar a página.");
+    },
     async remover(pdfId: string) {
-      await garantirMigracao();
       const { data, error: erroLeitura } = await supabase()
         .from("pdfs")
         .select("storage_path")
         .eq("id", pdfId)
         .maybeSingle();
       checar(erroLeitura, "Não foi possível excluir o PDF.");
-      const marcas = await caminhosDasMarcas([pdfId]);
+      const marcas = await caminhosDeMarcasDosPdfs([pdfId]);
       if (marcas.length) {
         const { error } = await supabase().storage.from("marcas").remove(marcas);
         checar(error, "Não foi possível excluir o PDF.");
@@ -633,174 +624,21 @@ export const repoRemoto = {
         cachePdf.delete(caminho);
         void tirarPdfDoCache(caminho);
       }
+      // Os cards ficam, sem o PDF de origem: o banco troca pdf_id por nulo.
       const { error } = await supabase().from("pdfs").delete().eq("id", pdfId);
       checar(error, "Não foi possível excluir o PDF.");
       avisarMudanca();
     },
   },
 
-  blocos: {
-    async listarTodos() {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("blocos").select("*");
-      checar(error, "Não foi possível ler os blocos.");
-      return ordenarBlocos(((data ?? []) as LinhaBloco[]).map(blocoDe));
-    },
-    async listarPorPdf(pdfId: string) {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("blocos").select("*").eq("pdf_id", pdfId);
-      checar(error, "Não foi possível ler os blocos.");
-      return ordenarBlocos(((data ?? []) as LinhaBloco[]).map(blocoDe));
-    },
-    async obter(blocoId: string): Promise<Bloco | null> {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("blocos").select("*").eq("id", blocoId).maybeSingle();
-      checar(error, "Não foi possível ler o bloco.");
-      return data ? blocoDe(data as LinhaBloco) : null;
-    },
-    async criar(entrada: { pdfId: string; titulo: string; paginaInicio: number; paginaFim: number }) {
-      await garantirMigracao();
-      const pdf = await repoRemoto.pdfs.obter(entrada.pdfId);
-      if (!pdf) throw new ErroEstudo("PDF não encontrado.");
-      const erroFaixa = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
-      if (erroFaixa) throw new ErroEstudo(erroFaixa);
-      const existentes = await repoRemoto.blocos.listarPorPdf(pdf.id);
-      const conflito = conflitoDeFaixa(existentes, entrada.paginaInicio, entrada.paginaFim);
-      if (conflito) {
-        throw new ErroEstudo(
-          `Esta faixa cruza "${conflito.titulo}" (${descreverFaixa(conflito.paginaInicio, conflito.paginaFim)}).`,
-        );
-      }
-      const bloco: Bloco = {
-        id: novoId(),
-        pdfId: pdf.id,
-        titulo: entrada.titulo.trim() || `Páginas ${entrada.paginaInicio}–${entrada.paginaFim}`,
-        paginaInicio: entrada.paginaInicio,
-        paginaFim: entrada.paginaFim,
-        status: "estudando",
-        createdAt: Date.now(),
-      };
-      const { error } = await supabase().from("blocos").insert({
-        id: bloco.id,
-        pdf_id: bloco.pdfId,
-        titulo: bloco.titulo,
-        pagina_inicio: bloco.paginaInicio,
-        pagina_fim: bloco.paginaFim,
-        status: bloco.status,
-        created_at: iso(bloco.createdAt),
-      });
-      checar(error, "Não foi possível criar o bloco.");
-      await sincronizarAnotacoes(pdf.id);
-      avisarMudanca();
-      return bloco;
-    },
-    async atualizar(blocoId: string, entrada: { titulo: string; paginaInicio: number; paginaFim: number }) {
-      await garantirMigracao();
-      const bloco = await repoRemoto.blocos.obter(blocoId);
-      if (!bloco) throw new ErroEstudo("Bloco não encontrado.");
-      const pdf = await repoRemoto.pdfs.obter(bloco.pdfId);
-      if (!pdf) throw new ErroEstudo("PDF não encontrado.");
-      const erroFaixa = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
-      if (erroFaixa) throw new ErroEstudo(erroFaixa);
-      const existentes = await repoRemoto.blocos.listarPorPdf(pdf.id);
-      const conflito = conflitoDeFaixa(existentes, entrada.paginaInicio, entrada.paginaFim, bloco.id);
-      if (conflito) {
-        throw new ErroEstudo(
-          `Esta faixa cruza "${conflito.titulo}" (${descreverFaixa(conflito.paginaInicio, conflito.paginaFim)}).`,
-        );
-      }
-      const { data, error } = await supabase()
-        .from("blocos")
-        .update({
-          titulo: exigirNome(entrada.titulo, "Dê um título ao bloco."),
-          pagina_inicio: entrada.paginaInicio,
-          pagina_fim: entrada.paginaFim,
-        })
-        .eq("id", bloco.id)
-        .select("id");
-      checar(error, "Não foi possível atualizar o bloco.");
-      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
-      await sincronizarAnotacoes(pdf.id);
-      avisarMudanca();
-    },
-    async definirStatus(blocoId: string, status: StatusBloco) {
-      await garantirMigracao();
-      const { data, error } = await supabase()
-        .from("blocos")
-        .update({ status })
-        .eq("id", blocoId)
-        .select("id");
-      checar(error, "Não foi possível atualizar o bloco.");
-      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
-      avisarMudanca();
-    },
-    async salvarResumo(blocoId: string, resumo: string) {
-      await garantirMigracao();
-      const { data, error } = await supabase()
-        .from("blocos")
-        .update({ resumo: resumo.trim() })
-        .eq("id", blocoId)
-        .select("id");
-      checar(error, "Não foi possível guardar o resumo.");
-      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
-      avisarMudanca();
-    },
-    async finalizar(blocoId: string, resumo: string) {
-      await garantirMigracao();
-      const limpo = exigirNome(resumo, "Resuma o bloco com as suas palavras antes de finalizar.");
-      const { data, error } = await supabase()
-        .from("blocos")
-        .update({
-          status: "finalizado",
-          resumo: limpo,
-          revisoes: 0,
-          proxima_revisao_em: iso(somarDias(Date.now(), 1)),
-        })
-        .eq("id", blocoId)
-        .select("id");
-      checar(error, "Não foi possível finalizar o bloco.");
-      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
-      avisarMudanca();
-    },
-    async registrarRevisao(blocoId: string, entrada: { revisoes: number; proximaRevisaoEm: number }) {
-      await garantirMigracao();
-      const { data, error } = await supabase()
-        .from("blocos")
-        .update({ revisoes: entrada.revisoes, proxima_revisao_em: iso(entrada.proximaRevisaoEm) })
-        .eq("id", blocoId)
-        .select("id");
-      checar(error, "Não foi possível registrar a revisão.");
-      if (!data?.length) throw new ErroEstudo("Bloco não encontrado.");
-      avisarMudanca();
-    },
-    async remover(blocoId: string) {
-      await garantirMigracao();
-      const bloco = await repoRemoto.blocos.obter(blocoId);
-      if (!bloco) return;
-      const { error } = await supabase().from("blocos").delete().eq("id", blocoId);
-      checar(error, "Não foi possível excluir o bloco.");
-      await sincronizarAnotacoes(bloco.pdfId);
-      avisarMudanca();
-    },
-  },
-
   grifos: {
     async listarPorPdf(pdfId: string) {
-      await garantirMigracao();
       const { data, error } = await supabase().from("grifos").select("*").eq("pdf_id", pdfId);
       checar(error, "Não foi possível ler os grifos.");
       const lista = await comImagens((data ?? []) as LinhaGrifo[]);
       return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
-    async listarPorBloco(blocoId: string) {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("grifos").select("*").eq("bloco_id", blocoId);
-      checar(error, "Não foi possível ler os grifos.");
-      const lista = await comImagens((data ?? []) as LinhaGrifo[]);
-      return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
-    },
     async criar(entrada: { pdfId: string; pagina: number; texto: string; cor: CorGrifo; rects: Rect[]; imagem?: Blob }) {
-      await garantirMigracao();
       const pdf = await repoRemoto.pdfs.obter(entrada.pdfId);
       if (!pdf) throw new ErroEstudo("PDF não encontrado.");
       const texto = entrada.texto.trim();
@@ -809,11 +647,9 @@ export const repoRemoto = {
       if (entrada.pagina < 1 || entrada.pagina > pdf.numPages) {
         throw new ErroEstudo("Esta página não existe neste PDF.");
       }
-      const blocos = await repoRemoto.blocos.listarPorPdf(pdf.id);
       const grifo: Grifo = {
         id: novoId(),
         pdfId: pdf.id,
-        blocoId: blocoDaPagina(blocos, entrada.pagina)?.id ?? null,
         pagina: entrada.pagina,
         texto,
         cor: entrada.cor,
@@ -834,7 +670,6 @@ export const repoRemoto = {
       const { error } = await supabase().from("grifos").insert({
         id: grifo.id,
         pdf_id: grifo.pdfId,
-        bloco_id: grifo.blocoId,
         pagina: grifo.pagina,
         texto: grifo.texto,
         cor: grifo.cor,
@@ -850,7 +685,6 @@ export const repoRemoto = {
       return grifo;
     },
     async remover(grifoId: string) {
-      await garantirMigracao();
       const { data, error: erroLeitura } = await supabase()
         .from("grifos")
         .select("imagem_path")
@@ -870,23 +704,13 @@ export const repoRemoto = {
 
   postits: {
     async listarPorPdf(pdfId: string) {
-      await garantirMigracao();
       const { data, error } = await supabase().from("postits").select("*").eq("pdf_id", pdfId);
       checar(error, "Não foi possível ler os post-its.");
       return ((data ?? []) as LinhaPostit[])
         .map(postitDe)
         .sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
-    async listarPorBloco(blocoId: string) {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("postits").select("*").eq("bloco_id", blocoId);
-      checar(error, "Não foi possível ler os post-its.");
-      return ((data ?? []) as LinhaPostit[])
-        .map(postitDe)
-        .sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
-    },
     async criar(entrada: { pdfId: string; pagina: number; texto: string; x: number; y: number }) {
-      await garantirMigracao();
       const pdf = await repoRemoto.pdfs.obter(entrada.pdfId);
       if (!pdf) throw new ErroEstudo("PDF não encontrado.");
       const texto = entrada.texto.trim();
@@ -894,11 +718,9 @@ export const repoRemoto = {
       if (entrada.pagina < 1 || entrada.pagina > pdf.numPages) {
         throw new ErroEstudo("Esta página não existe neste PDF.");
       }
-      const blocos = await repoRemoto.blocos.listarPorPdf(pdf.id);
       const postit: PostIt = {
         id: novoId(),
         pdfId: pdf.id,
-        blocoId: blocoDaPagina(blocos, entrada.pagina)?.id ?? null,
         pagina: entrada.pagina,
         texto,
         x: limitar(entrada.x, 0.01, 0.98),
@@ -908,7 +730,6 @@ export const repoRemoto = {
       const { error } = await supabase().from("postits").insert({
         id: postit.id,
         pdf_id: postit.pdfId,
-        bloco_id: postit.blocoId,
         pagina: postit.pagina,
         texto: postit.texto,
         x: postit.x,
@@ -920,7 +741,6 @@ export const repoRemoto = {
       return postit;
     },
     async definirTexto(postitId: string, texto: string) {
-      await garantirMigracao();
       const limpo = exigirNome(texto, "O post-it precisa de um texto.");
       const { data, error } = await supabase()
         .from("postits")
@@ -932,7 +752,6 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async mover(postitId: string, x: number, y: number) {
-      await garantirMigracao();
       const { data, error } = await supabase()
         .from("postits")
         .update({ x: limitar(x, 0.01, 0.98), y: limitar(y, 0.01, 0.98) })
@@ -943,7 +762,6 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async remover(postitId: string) {
-      await garantirMigracao();
       const { error } = await supabase().from("postits").delete().eq("id", postitId);
       checar(error, "Não foi possível tirar o post-it.");
       avisarMudanca();
@@ -951,34 +769,25 @@ export const repoRemoto = {
   },
 
   questoes: {
-    async listarPorBloco(blocoId: string) {
-      await garantirMigracao();
-      const { data, error } = await supabase().from("questoes").select("*").eq("bloco_id", blocoId);
-      checar(error, "Não foi possível ler as questões.");
-      return ((data ?? []) as LinhaQuestao[]).map(questaoDe).sort((a, b) => a.createdAt - b.createdAt);
-    },
     async listarPorPdf(pdfId: string) {
-      await garantirMigracao();
       const { data, error } = await supabase().from("questoes").select("*").eq("pdf_id", pdfId);
-      checar(error, "Não foi possível ler as questões.");
-      return ((data ?? []) as LinhaQuestao[]).map(questaoDe).sort((a, b) => a.createdAt - b.createdAt);
+      checar(error, "Não foi possível ler os cards.");
+      const lista = await cardsComImagens((data ?? []) as LinhaQuestao[]);
+      return lista.sort((a, b) => (a.pagina ?? 0) - (b.pagina ?? 0) || a.createdAt - b.createdAt);
     },
     async listarPorMateria(materiaId: string) {
-      await garantirMigracao();
       const { data, error } = await supabase().from("questoes").select("*").eq("materia_id", materiaId);
-      checar(error, "Não foi possível ler as questões.");
-      return ((data ?? []) as LinhaQuestao[]).map(questaoDe).sort((a, b) => a.createdAt - b.createdAt);
+      checar(error, "Não foi possível ler os cards.");
+      return ordenarCards(await cardsComImagens((data ?? []) as LinhaQuestao[]));
     },
     async listarTodas() {
-      await garantirMigracao();
       const { data, error } = await supabase().from("questoes").select("*");
-      checar(error, "Não foi possível ler as questões.");
-      return ((data ?? []) as LinhaQuestao[]).map(questaoDe).sort((a, b) => a.createdAt - b.createdAt);
+      checar(error, "Não foi possível ler os cards.");
+      return ordenarCards(await cardsComImagens((data ?? []) as LinhaQuestao[]));
     },
     async contarPorMateria(): Promise<Record<string, number>> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("questoes").select("materia_id");
-      checar(error, "Não foi possível contar as questões.");
+      checar(error, "Não foi possível contar os cards.");
       const contagem: Record<string, number> = {};
       for (const linha of (data ?? []) as { materia_id: string }[]) {
         contagem[linha.materia_id] = (contagem[linha.materia_id] ?? 0) + 1;
@@ -986,87 +795,126 @@ export const repoRemoto = {
       return contagem;
     },
     async contarVencidas(agora = Date.now()): Promise<number> {
-      await garantirMigracao();
       const { count, error } = await supabase()
         .from("questoes")
         .select("id", { count: "exact", head: true })
+        .eq("suspensa", false)
         .or(`proxima_em.is.null,proxima_em.lte.${iso(agora)}`);
-      checar(error, "Não foi possível contar as questões vencidas.");
+      checar(error, "Não foi possível contar os cards vencidos.");
       return count ?? 0;
     },
-    async criar(entrada: { blocoId: string; materiaId: string; enunciado: string; resposta: string }) {
-      await garantirMigracao();
-      const enunciado = exigirNome(entrada.enunciado, "Escreva o enunciado.");
-      const resposta = exigirNome(entrada.resposta, "Escreva a resposta.");
-      const bloco = await repoRemoto.blocos.obter(entrada.blocoId);
-      if (!bloco) throw new ErroEstudo("Bloco não encontrado.");
-      const pdf = await repoRemoto.pdfs.obter(bloco.pdfId);
-      if (!pdf || pdf.materiaId !== entrada.materiaId) {
-        throw new ErroEstudo("Este bloco não pertence a esta matéria.");
+    async criar(entrada: {
+      materiaId: string;
+      pdfId?: string | null;
+      pagina?: number | null;
+      topicoId?: string | null;
+      tipo?: TipoCard;
+      enunciado: string;
+      resposta: string;
+      imagem?: Blob;
+    }) {
+      const tipo = entrada.tipo ?? "basico";
+      const textos = prepararCard(tipo, entrada.enunciado, entrada.resposta, Boolean(entrada.imagem));
+      const materia = await repoRemoto.materias.obter(entrada.materiaId);
+      if (!materia) throw new ErroEstudo("Matéria não encontrada.");
+      if (entrada.pdfId) {
+        const pdf = await repoRemoto.pdfs.obter(entrada.pdfId);
+        if (!pdf || pdf.materiaId !== materia.id) throw new ErroEstudo("Este PDF não pertence a esta matéria.");
       }
-      const { count, error: erroContagem } = await supabase()
-        .from("questoes")
-        .select("id", { count: "exact", head: true })
-        .eq("bloco_id", bloco.id);
-      checar(erroContagem, "Não foi possível guardar a questão.");
-      if ((count ?? 0) >= MAX_QUESTOES) throw new ErroEstudo(`Este bloco já tem ${MAX_QUESTOES} questões.`);
+      const agora = Date.now();
       const questao: Questao = {
         id: novoId(),
-        blocoId: bloco.id,
-        materiaId: pdf.materiaId,
-        pdfId: pdf.id,
-        enunciado,
-        resposta,
+        materiaId: materia.id,
+        pdfId: entrada.pdfId ?? null,
+        pagina: entrada.pagina ?? null,
+        topicoId: entrada.topicoId ?? null,
+        tipo,
+        enunciado: textos.enunciado,
+        resposta: textos.resposta,
+        ...(entrada.imagem ? { imagem: entrada.imagem } : {}),
+        suspensa: false,
         statusRevisao: "nova",
         sequencia: 0,
         facilidade: 2.5,
         intervaloDias: 0,
-        proximaEm: Date.now(),
-        createdAt: Date.now(),
+        proximaEm: agora,
+        createdAt: agora,
       };
+      let imagemPath: string | null = null;
+      if (entrada.imagem) {
+        imagemPath = `card-${questao.id}.png`;
+        const enviado = await supabase().storage.from("marcas").upload(imagemPath, entrada.imagem, {
+          contentType: "image/png",
+          upsert: false,
+        });
+        checar(enviado.error, "Não foi possível guardar a imagem do card.");
+        cacheMarca.set(imagemPath, entrada.imagem);
+      }
       const { error } = await supabase().from("questoes").insert({
         id: questao.id,
-        bloco_id: questao.blocoId,
         materia_id: questao.materiaId,
         pdf_id: questao.pdfId,
+        pagina: questao.pagina,
+        topico_id: questao.topicoId,
+        tipo: questao.tipo,
         enunciado: questao.enunciado,
         resposta: questao.resposta,
+        imagem_path: imagemPath,
+        suspensa: false,
         status_revisao: questao.statusRevisao,
         sequencia: 0,
         facilidade: 2.5,
         intervalo_dias: 0,
-        proxima_em: iso(questao.proximaEm ?? Date.now()),
-        created_at: iso(questao.createdAt),
+        proxima_em: iso(agora),
+        created_at: iso(agora),
       });
-      checar(error, "Não foi possível guardar a questão.");
+      if (error) {
+        if (imagemPath) await supabase().storage.from("marcas").remove([imagemPath]);
+        checar(error, "Não foi possível guardar o card.");
+      }
       avisarMudanca();
       return questao;
     },
-    async atualizar(questaoId: string, entrada: { enunciado: string; resposta: string }) {
-      await garantirMigracao();
-      const enunciado = exigirNome(entrada.enunciado, "Escreva o enunciado.");
-      const resposta = exigirNome(entrada.resposta, "Escreva a resposta.");
+    async atualizar(
+      questaoId: string,
+      entrada: { enunciado: string; resposta: string; topicoId?: string | null },
+    ) {
+      const { data: atual, error: erroLeitura } = await supabase()
+        .from("questoes")
+        .select("tipo, imagem_path")
+        .eq("id", questaoId)
+        .maybeSingle();
+      checar(erroLeitura, "Não foi possível atualizar o card.");
+      if (!atual) throw new ErroEstudo("Card não encontrado.");
+      const linha = atual as { tipo: TipoCard; imagem_path: string | null };
+      const textos = prepararCard(linha.tipo, entrada.enunciado, entrada.resposta, Boolean(linha.imagem_path));
       const { data, error } = await supabase()
         .from("questoes")
-        .update({ enunciado, resposta })
+        .update({
+          ...textos,
+          ...(entrada.topicoId !== undefined ? { topico_id: entrada.topicoId } : {}),
+        })
         .eq("id", questaoId)
         .select("id");
-      checar(error, "Não foi possível atualizar a questão.");
-      if (!data?.length) throw new ErroEstudo("Questão não encontrada.");
+      checar(error, "Não foi possível atualizar o card.");
+      if (!data?.length) throw new ErroEstudo("Card não encontrado.");
+      avisarMudanca();
+    },
+    async definirSuspensa(questaoId: string, suspensa: boolean) {
+      const { data, error } = await supabase()
+        .from("questoes")
+        .update({ suspensa })
+        .eq("id", questaoId)
+        .select("id");
+      checar(error, "Não foi possível suspender o card.");
+      if (!data?.length) throw new ErroEstudo("Card não encontrado.");
       avisarMudanca();
     },
     async registrarJulgamento(
       questaoId: string,
-      entrada: {
-        sequencia: number;
-        proximaEm: number;
-        statusRevisao: StatusRevisao;
-        facilidade: number;
-        intervaloDias: number;
-      },
+      entrada: AgendaCard,
       tentativa: Omit<Tentativa, "questaoId" | "em">,
     ) {
-      await garantirMigracao();
       const { data, error } = await supabase()
         .from("questoes")
         .update({
@@ -1079,13 +927,14 @@ export const repoRemoto = {
         .eq("id", questaoId)
         .select("id");
       checar(error, "Não foi possível guardar o resultado.");
-      if (!data?.length) throw new ErroEstudo("Questão não encontrada.");
+      if (!data?.length) throw new ErroEstudo("Card não encontrado.");
       const { error: erroTentativa } = await supabase().from("tentativas").upsert({
         id: tentativa.id,
         questao_id: questaoId,
-        pdf_id: tentativa.pdfId,
         materia_id: tentativa.materiaId,
-        bloco_id: tentativa.blocoId,
+        pdf_id: tentativa.pdfId,
+        topico_id: tentativa.topicoId,
+        pagina: tentativa.pagina,
         acertou: tentativa.acertou,
         nota: tentativa.nota ?? null,
         confianca: tentativa.confianca ?? null,
@@ -1095,17 +944,44 @@ export const repoRemoto = {
       checar(erroTentativa, "Não foi possível guardar o resultado.");
       avisarMudanca();
     },
+    async desfazerJulgamento(questaoId: string, anterior: AgendaCard, tentativaId: string) {
+      const { data, error } = await supabase()
+        .from("questoes")
+        .update({
+          sequencia: anterior.sequencia,
+          facilidade: anterior.facilidade,
+          intervalo_dias: anterior.intervaloDias,
+          proxima_em: iso(anterior.proximaEm),
+          status_revisao: anterior.statusRevisao,
+        })
+        .eq("id", questaoId)
+        .select("id");
+      checar(error, "Não foi possível desfazer a nota.");
+      if (!data?.length) throw new ErroEstudo("Card não encontrado.");
+      const apagada = await supabase().from("tentativas").delete().eq("id", tentativaId);
+      checar(apagada.error, "Não foi possível desfazer a nota.");
+      avisarMudanca();
+    },
     async remover(questaoId: string) {
-      await garantirMigracao();
+      const { data, error: erroLeitura } = await supabase()
+        .from("questoes")
+        .select("imagem_path")
+        .eq("id", questaoId)
+        .maybeSingle();
+      checar(erroLeitura, "Não foi possível excluir o card.");
+      const caminho = (data as { imagem_path: string | null } | null)?.imagem_path;
       const { error } = await supabase().from("questoes").delete().eq("id", questaoId);
-      checar(error, "Não foi possível excluir a questão.");
+      checar(error, "Não foi possível excluir o card.");
+      if (caminho) {
+        cacheMarca.delete(caminho);
+        await supabase().storage.from("marcas").remove([caminho]);
+      }
       avisarMudanca();
     },
   },
 
   tentativas: {
     async listar(): Promise<Tentativa[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("tentativas").select("*");
       checar(error, "Não foi possível ler os resultados.");
       return ((data ?? []) as LinhaTentativa[]).map(tentativaDe);
@@ -1114,19 +990,16 @@ export const repoRemoto = {
 
   editais: {
     async listar(): Promise<Edital[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("editais").select("*");
       checar(error, "Não foi possível ler os editais.");
       return porNome(((data ?? []) as LinhaEdital[]).map(editalDe));
     },
     async obter(editalId: string): Promise<Edital | null> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("editais").select("*").eq("id", editalId).maybeSingle();
       checar(error, "Não foi possível ler o edital.");
       return data ? editalDe(data as LinhaEdital) : null;
     },
     async criar(entrada: { nome: string; orgao: string; dataProva?: number | null }) {
-      await garantirMigracao();
       const edital: Edital = {
         id: novoId(),
         nome: exigirNome(entrada.nome, "Dê um nome ao edital."),
@@ -1146,7 +1019,6 @@ export const repoRemoto = {
       return edital;
     },
     async atualizar(editalId: string, entrada: { nome: string; orgao: string; dataProva?: number | null }) {
-      await garantirMigracao();
       const { data, error } = await supabase()
         .from("editais")
         .update({
@@ -1161,19 +1033,17 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async remover(editalId: string) {
-      await garantirMigracao();
+      // Os tópicos saem junto; os cards deles ficam, sem tópico (o banco cuida disso).
       const { error } = await supabase().from("editais").delete().eq("id", editalId);
       checar(error, "Não foi possível excluir o edital.");
       avisarMudanca();
     },
     async vinculos(): Promise<EditalMateria[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("edital_materias").select("*");
       checar(error, "Não foi possível ler os vínculos dos editais.");
       return ((data ?? []) as LinhaVinculo[]).map(vinculoDe);
     },
     async materias(editalId: string): Promise<string[]> {
-      await garantirMigracao();
       const { data, error } = await supabase()
         .from("edital_materias")
         .select("materia_id")
@@ -1182,7 +1052,6 @@ export const repoRemoto = {
       return ((data ?? []) as { materia_id: string }[]).map((vinculo) => vinculo.materia_id);
     },
     async daMateria(materiaId: string): Promise<Edital[]> {
-      await garantirMigracao();
       const { data, error } = await supabase()
         .from("edital_materias")
         .select("edital_id")
@@ -1195,7 +1064,6 @@ export const repoRemoto = {
       return porNome(((resposta.data ?? []) as LinhaEdital[]).map(editalDe));
     },
     async definirMaterias(editalId: string, materiaIds: string[]) {
-      await garantirMigracao();
       const edital = await repoRemoto.editais.obter(editalId);
       if (!edital) throw new ErroEstudo("Edital não encontrado.");
       const unicos = [...new Set(materiaIds)];
@@ -1228,19 +1096,16 @@ export const repoRemoto = {
 
   topicos: {
     async listarTodos(): Promise<EditalTopico[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("edital_topicos").select("*");
       checar(error, "Não foi possível ler os tópicos.");
       return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
     },
     async listarPorEdital(editalId: string): Promise<EditalTopico[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("edital_topicos").select("*").eq("edital_id", editalId);
       checar(error, "Não foi possível ler os tópicos.");
       return ((data ?? []) as LinhaTopico[]).map(topicoDe).sort((a, b) => a.createdAt - b.createdAt);
     },
     async criar(entrada: { editalId: string; materiaId: string | null; nome: string; peso: number }) {
-      await garantirMigracao();
       const edital = await repoRemoto.editais.obter(entrada.editalId);
       if (!edital) throw new ErroEstudo("Edital não encontrado.");
       const topico: EditalTopico = {
@@ -1249,7 +1114,9 @@ export const repoRemoto = {
         materiaId: entrada.materiaId,
         nome: exigirNome(entrada.nome, "Dê um nome ao tópico."),
         peso: limitarPeso(entrada.peso),
-        blocoId: null,
+        pdfId: null,
+        paginaInicio: null,
+        paginaFim: null,
         feito: false,
         createdAt: Date.now(),
       };
@@ -1259,7 +1126,6 @@ export const repoRemoto = {
         materia_id: topico.materiaId,
         nome: topico.nome,
         peso: topico.peso,
-        bloco_id: null,
         feito: false,
         created_at: iso(topico.createdAt),
       });
@@ -1269,15 +1135,28 @@ export const repoRemoto = {
     },
     async atualizar(
       topicoId: string,
-      entrada: Partial<Pick<EditalTopico, "nome" | "peso" | "materiaId" | "blocoId" | "feito">>,
+      entrada: Partial<
+        Pick<EditalTopico, "nome" | "peso" | "materiaId" | "pdfId" | "paginaInicio" | "paginaFim" | "feito">
+      >,
     ) {
-      await garantirMigracao();
       const mudanca: Record<string, unknown> = {};
       if (entrada.nome !== undefined) mudanca.nome = exigirNome(entrada.nome, "Dê um nome ao tópico.");
       if (entrada.peso !== undefined) mudanca.peso = limitarPeso(entrada.peso);
       if (entrada.materiaId !== undefined) mudanca.materia_id = entrada.materiaId;
-      if (entrada.blocoId !== undefined) mudanca.bloco_id = entrada.blocoId;
       if (entrada.feito !== undefined) mudanca.feito = entrada.feito;
+      if (entrada.pdfId !== undefined) mudanca.pdf_id = entrada.pdfId;
+      if (entrada.pdfId === null) {
+        mudanca.pagina_inicio = null;
+        mudanca.pagina_fim = null;
+      }
+      if (entrada.paginaInicio !== undefined) mudanca.pagina_inicio = entrada.paginaInicio;
+      if (entrada.paginaFim !== undefined) mudanca.pagina_fim = entrada.paginaFim;
+      if (entrada.pdfId && entrada.paginaInicio != null && entrada.paginaFim != null) {
+        const pdf = await repoRemoto.pdfs.obter(entrada.pdfId);
+        if (!pdf) throw new ErroEstudo("PDF não encontrado.");
+        const erro = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
+        if (erro) throw new ErroEstudo(erro);
+      }
       const { data, error } = await supabase()
         .from("edital_topicos")
         .update(mudanca)
@@ -1288,7 +1167,6 @@ export const repoRemoto = {
       avisarMudanca();
     },
     async remover(topicoId: string) {
-      await garantirMigracao();
       const { error } = await supabase().from("edital_topicos").delete().eq("id", topicoId);
       checar(error, "Não foi possível excluir o tópico.");
       avisarMudanca();
@@ -1297,13 +1175,11 @@ export const repoRemoto = {
 
   lancamentos: {
     async listar(): Promise<Lancamento[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("lancamentos").select("*");
       checar(error, "Não foi possível ler os lançamentos.");
       return ((data ?? []) as LinhaLancamento[]).map(lancamentoDe).sort((a, b) => b.em - a.em);
     },
     async criar(entrada: { materiaId: string; feitas: number; acertos: number; fonte: string }) {
-      await garantirMigracao();
       validarLancamento(entrada.feitas, entrada.acertos);
       const materia = await repoRemoto.materias.obter(entrada.materiaId);
       if (!materia) throw new ErroEstudo("Matéria não encontrada.");
@@ -1328,7 +1204,6 @@ export const repoRemoto = {
       return lancamento;
     },
     async remover(lancamentoId: string) {
-      await garantirMigracao();
       const { error } = await supabase().from("lancamentos").delete().eq("id", lancamentoId);
       checar(error, "Não foi possível excluir o lançamento.");
       avisarMudanca();
@@ -1337,13 +1212,11 @@ export const repoRemoto = {
 
   estudos: {
     async listar(): Promise<Estudo[]> {
-      await garantirMigracao();
       const { data, error } = await supabase().from("estudos").select("*");
       checar(error, "Não foi possível ler o tempo de estudo.");
       return ((data ?? []) as LinhaEstudo[]).map(estudoDe);
     },
     async registrar(entrada: { materiaId: string | null; segundos: number; em?: number }) {
-      await garantirMigracao();
       const segundos = Math.round(entrada.segundos);
       if (!Number.isFinite(segundos) || segundos < 1) throw new ErroEstudo("A sessão ficou curta demais para registrar.");
       const estudo: Estudo = {
@@ -1363,7 +1236,6 @@ export const repoRemoto = {
       return estudo;
     },
     async remover(estudoId: string) {
-      await garantirMigracao();
       const { error } = await supabase().from("estudos").delete().eq("id", estudoId);
       checar(error, "Não foi possível excluir a sessão.");
       avisarMudanca();

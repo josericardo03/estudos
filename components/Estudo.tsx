@@ -20,7 +20,7 @@ import { Abrindo, Aviso, Confirmar } from "./ui";
 
 const MODOS = [
   { id: "25", nome: "Pomodoro 25 + 5", duracaoS: 25 * 60 },
-  { id: "50", nome: "Bloco 50 + 10", duracaoS: 50 * 60 },
+  { id: "50", nome: "Sessão 50 + 10", duracaoS: 50 * 60 },
   { id: "livre", nome: "Livre", duracaoS: 0 },
 ] as const;
 

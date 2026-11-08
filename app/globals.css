@@ -934,3 +934,38 @@ a.citacao {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- cards de lacuna e busca no PDF ---------- */
+
+.lacuna-fechada,
+.lacuna-aberta {
+  display: inline-block;
+  margin: 0 0.1rem;
+  padding: 0 0.35rem;
+  border-radius: 0.35rem;
+}
+
+.lacuna-fechada {
+  min-width: 4rem;
+  background: var(--ink);
+  color: transparent;
+  user-select: none;
+}
+
+.lacuna-aberta {
+  background: var(--pine-soft);
+  color: var(--pine);
+  box-shadow: inset 0 0 0 1.5px var(--pine);
+}
+
+.textLayer span.achado {
+  background: rgb(255 196 0 / 0.5);
+  border-radius: 2px;
+}
+
+.ponto-card {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 0.15rem;
+  background: var(--pine-bg);
+}

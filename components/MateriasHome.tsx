@@ -53,7 +53,7 @@ export function MateriasHome() {
       <p className="olho">Estúdio</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Matérias</h1>
       <p className="mt-3 max-w-xl text-muted">
-        Cada matéria guarda os PDFs, os blocos de páginas e as questões daquele assunto.
+        Cada matéria guarda os PDFs que você lê e os cards que cria a partir deles.
       </p>
 
       {vencidas > 0 ? (
@@ -62,7 +62,7 @@ export function MateriasHome() {
           className="cartao mt-6 flex flex-wrap items-center justify-between gap-3 px-4 py-3 no-underline hover:bg-sheet"
         >
           <span className="text-ink">
-            {vencidas} {vencidas === 1 ? "questão vencida" : "questões vencidas"} para revisar hoje
+            {vencidas} {vencidas === 1 ? "card vencido" : "cards vencidos"} para revisar hoje
           </span>
           <span className="btn btn-primario">Começar</span>
         </Link>
@@ -109,7 +109,7 @@ export function MateriasHome() {
                   <span className="mt-1 block text-sm text-muted">
                     {item.pdfs} {item.pdfs === 1 ? "PDF" : "PDFs"}
                     {" · "}
-                    {item.questoes} {item.questoes === 1 ? "questão" : "questões"}
+                    {item.questoes} {item.questoes === 1 ? "card" : "cards"}
                     {" · "}
                     {item.editais} {item.editais === 1 ? "edital" : "editais"}
                   </span>
@@ -118,7 +118,7 @@ export function MateriasHome() {
               {item.questoes > 0 ? (
                 <div className="-mt-2 pb-3 pl-12">
                   <Link href={caminhoBanco(item.materia.id)} className="text-sm text-pine no-underline hover:underline">
-                    Revisar questões
+                    Ver cards
                   </Link>
                 </div>
               ) : null}

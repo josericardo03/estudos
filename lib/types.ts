@@ -1,12 +1,13 @@
 export type Prioridade = "alta" | "media" | "baixa";
 export type CorGrifo = Prioridade | "importante";
-export type StatusBloco = "estudando" | "finalizado";
 export type StatusRevisao = "nova" | "revisar" | "dominada";
 /** 1 Errei, 2 Difícil, 3 Bom, 4 Fácil. */
 export type Nota = 1 | 2 | 3 | 4;
 /** 1 chute, 2 acho que sei, 3 tenho certeza. */
 export type Confianca = 1 | 2 | 3;
 export type MotivoErro = "nao-sabia" | "confundi" | "distracao" | "chute";
+/** Frente e verso, ou texto com lacunas marcadas com {{ }}. */
+export type TipoCard = "basico" | "lacuna";
 
 export type Rect = {
   x: number;
@@ -27,29 +28,16 @@ export type PdfDoc = {
   nome: string;
   blob?: Blob;
   numPages: number;
-  createdAt: number;
-};
-
-export type Bloco = {
-  id: string;
-  pdfId: string;
-  titulo: string;
-  paginaInicio: number;
-  paginaFim: number;
-  status: StatusBloco;
-  /** Resumo escrito com as próprias palavras ao finalizar o bloco. */
-  resumo?: string;
-  /** Quando o bloco finalizado volta para releitura ativa. */
-  proximaRevisaoEm?: number;
-  /** Quantas releituras já foram feitas. */
-  revisoes?: number;
+  /** Página em que você parou. Acompanha você em qualquer aparelho. */
+  ultimaPagina?: number;
+  /** A página mais adiante que você já abriu. Mede o progresso de leitura. */
+  maiorPagina?: number;
   createdAt: number;
 };
 
 export type Grifo = {
   id: string;
   pdfId: string;
-  blocoId: string | null;
   pagina: number;
   texto: string;
   cor: CorGrifo;
@@ -61,7 +49,6 @@ export type Grifo = {
 export type PostIt = {
   id: string;
   pdfId: string;
-  blocoId: string | null;
   pagina: number;
   texto: string;
   x: number;
@@ -72,9 +59,10 @@ export type PostIt = {
 export type Tentativa = {
   id: string;
   questaoId: string;
-  pdfId: string;
   materiaId: string;
-  blocoId: string;
+  pdfId: string | null;
+  topicoId: string | null;
+  pagina: number | null;
   acertou: boolean;
   em: number;
   nota?: Nota;
@@ -82,21 +70,32 @@ export type Tentativa = {
   motivo?: MotivoErro;
 };
 
+/** Um card de revisão. No app se chama questão. */
 export type Questao = {
   id: string;
-  blocoId: string;
   materiaId: string;
-  pdfId: string;
+  /** De onde o card veio. Vazio quando criado fora do leitor. */
+  pdfId: string | null;
+  pagina: number | null;
+  /** Tópico do edital a que o card pertence. */
+  topicoId: string | null;
+  tipo: TipoCard;
+  /** Frente do card. Em card de lacuna, o texto inteiro com {{respostas}}. */
   enunciado: string;
+  /** Verso do card. Em card de lacuna, um comentário opcional. */
   resposta: string;
+  /** Figura que acompanha o card, como o recorte de um "Importante". */
+  imagem?: Blob;
+  /** Cards suspensos não entram em nenhuma fila. */
+  suspensa?: boolean;
   statusRevisao: StatusRevisao;
-  /** Acertos seguidos. Erro zera. Questões antigas não têm o campo e contam como zero. */
+  /** Acertos seguidos. Erro zera. */
   sequencia?: number;
   /** Fator de crescimento do intervalo (começa em 2,5). */
   facilidade?: number;
-  /** Último intervalo, em dias. Ausente em questões antigas. */
+  /** Último intervalo, em dias. */
   intervaloDias?: number;
-  /** Quando a questão pode voltar. Ausente ou no passado: está vencida. */
+  /** Quando o card pode voltar. Ausente ou no passado: está vencido. */
   proximaEm?: number;
   createdAt: number;
 };
@@ -123,9 +122,11 @@ export type EditalTopico = {
   nome: string;
   /** 1 a 5: quanto o tópico pesa na prova. */
   peso: number;
-  /** Bloco que cobre o tópico. Bloco finalizado conta como coberto. */
-  blocoId: string | null;
-  /** Marcação manual, para tópicos sem bloco. */
+  /** Onde o tópico está no material: PDF e faixa de páginas (opcionais). */
+  pdfId: string | null;
+  paginaInicio: number | null;
+  paginaFim: number | null;
+  /** Marcação de que você já estudou o tópico. */
   feito: boolean;
   createdAt: number;
 };
@@ -148,8 +149,6 @@ export type Estudo = {
   em: number;
 };
 
-export const MAX_QUESTOES = 50;
-
 export const PRIORIDADES: { id: Prioridade; nome: string }[] = [
   { id: "alta", nome: "Alta" },
   { id: "media", nome: "Média" },
@@ -164,7 +163,7 @@ export function nomeDaCor(cor: CorGrifo) {
 }
 
 export const STATUS_REVISAO: { id: StatusRevisao; nome: string }[] = [
-  { id: "nova", nome: "Nova" },
+  { id: "nova", nome: "Em aprendizado" },
   { id: "revisar", nome: "Revisar" },
   { id: "dominada", nome: "Dominada" },
 ];

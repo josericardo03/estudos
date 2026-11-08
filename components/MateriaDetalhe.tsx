@@ -11,7 +11,7 @@ import { caminhoBanco, caminhoCaderno, caminhoPdf } from "@/lib/rotas";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso, Confirmar, NaoEncontrado } from "./ui";
 
-function LinhaPdf({ materiaId, pdf, blocos }: { materiaId: string; pdf: PdfDoc; blocos: number }) {
+function LinhaPdf({ materiaId, pdf }: { materiaId: string; pdf: PdfDoc }) {
   const [rascunho, setRascunho] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -50,7 +50,7 @@ function LinhaPdf({ materiaId, pdf, blocos }: { materiaId: string; pdf: PdfDoc; 
           <p className="mt-1 text-sm text-muted">
             {pdf.numPages} {pdf.numPages === 1 ? "página" : "páginas"}
             {" · "}
-            {blocos} {blocos === 1 ? "bloco" : "blocos"}
+            {pdf.maiorPagina ? `${Math.round((pdf.maiorPagina / pdf.numPages) * 100)}% lido` : "ainda não aberto"}
           </p>
           {erro ? <div className="mt-2"><Aviso texto={erro} /></div> : null}
         </div>
@@ -85,16 +85,12 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
   const { dados, pronto, erro: erroLeitura } = useConsulta(async () => {
     const materia = await repo.materias.obter(materiaId);
     if (!materia) return null;
-    const [pdfs, editais, contagem, blocos] = await Promise.all([
+    const [pdfs, editais, contagem] = await Promise.all([
       repo.pdfs.listarPorMateria(materia.id),
       repo.editais.daMateria(materia.id),
       repo.questoes.contarPorMateria(),
-      repo.blocos.listarTodos(),
     ]);
-    const blocosPorPdf = new Map<string, number>();
-    for (const bloco of blocos) blocosPorPdf.set(bloco.pdfId, (blocosPorPdf.get(bloco.pdfId) ?? 0) + 1);
-    const comBlocos = pdfs.map((pdf) => ({ pdf, blocos: blocosPorPdf.get(pdf.id) ?? 0 }));
-    return { materia, pdfs: comBlocos, editais, questoes: contagem[materia.id] ?? 0 };
+    return { materia, pdfs, editais, questoes: contagem[materia.id] ?? 0 };
   }, [materiaId], null);
 
   if (!pronto) return <Abrindo texto="Abrindo a matéria…" />;
@@ -166,7 +162,7 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
 
       <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
         <Link href={caminhoBanco(materiaId)} className="text-pine no-underline hover:underline">
-          {dados.questoes} {dados.questoes === 1 ? "questão no banco" : "questões no banco"}
+          {dados.questoes} {dados.questoes === 1 ? "card" : "cards"}
         </Link>
         <Confirmar
           rotulo="Excluir matéria"
@@ -201,8 +197,8 @@ export function MateriaDetalhe({ materiaId }: { materiaId: string }) {
           <p className="mt-4 text-muted">Envie o primeiro PDF desta matéria.</p>
         ) : (
           <ul className="mt-4 divide-y divide-line border-y border-line">
-            {dados.pdfs.map(({ pdf, blocos }) => (
-              <LinhaPdf key={pdf.id} materiaId={materiaId} pdf={pdf} blocos={blocos} />
+            {dados.pdfs.map((pdf) => (
+              <LinhaPdf key={pdf.id} materiaId={materiaId} pdf={pdf} />
             ))}
           </ul>
         )}

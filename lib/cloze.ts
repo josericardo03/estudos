@@ -1,5 +1,3 @@
-export type ParteCloze = { texto: string; oculto: boolean };
-
 const PALAVRAS_FRACAS = new Set([
   "porque", "entretanto", "contudo", "todavia", "portanto", "quando", "sempre", "mesmo", "outros",
   "outras", "assim", "também", "depois", "antes", "ainda", "sobre", "entre", "dentro", "contra",
@@ -28,14 +26,14 @@ function palavrasDe(texto: string) {
 }
 
 /**
- * Esconde as palavras-chave de um trecho (até 3, ou 1 em trecho curto).
- * Serve para virar pergunta de lacuna e para a releitura ativa do cadernão.
+ * Sugere onde pôr as lacunas de um trecho: devolve o texto com {{ }} em volta das
+ * palavras-chave (até 3, ou 1 em trecho curto). Você pode editar à vontade.
  */
-export function lacunar(texto: string, maximo = 3): ParteCloze[] {
+export function sugerirLacunas(texto: string, maximo = 3) {
   const limpo = texto.replace(/\s+/g, " ").trim();
-  if (!limpo) return [];
+  if (!limpo) return "";
   const candidatas = palavrasDe(limpo);
-  if (!candidatas.length) return [{ texto: limpo, oculto: false }];
+  if (!candidatas.length) return limpo;
 
   const quantas = Math.min(maximo, candidatas.length, limpo.length < 90 ? 1 : maximo);
   const escolhidas = candidatas
@@ -44,28 +42,12 @@ export function lacunar(texto: string, maximo = 3): ParteCloze[] {
     .slice(0, quantas)
     .sort((a, b) => a.inicio - b.inicio);
 
-  const partes: ParteCloze[] = [];
+  let saida = "";
   let cursor = 0;
   for (const palavra of escolhidas) {
-    if (palavra.inicio > cursor) partes.push({ texto: limpo.slice(cursor, palavra.inicio), oculto: false });
-    partes.push({ texto: limpo.slice(palavra.inicio, palavra.fim), oculto: true });
+    saida += limpo.slice(cursor, palavra.inicio);
+    saida += `{{${limpo.slice(palavra.inicio, palavra.fim)}}}`;
     cursor = palavra.fim;
   }
-  if (cursor < limpo.length) partes.push({ texto: limpo.slice(cursor), oculto: false });
-  return partes;
-}
-
-/** Enunciado com lacunas e gabarito com o trecho inteiro, prontos para editar. */
-export function gerarCloze(texto: string) {
-  const partes = lacunar(texto);
-  const limpo = texto.replace(/\s+/g, " ").trim();
-  if (!partes.some((parte) => parte.oculto)) {
-    return { enunciado: `Explique com as suas palavras: ${limpo}`, resposta: limpo };
-  }
-  const lacunado = partes.map((parte) => (parte.oculto ? "_____" : parte.texto)).join("");
-  const escondidas = partes.filter((parte) => parte.oculto).map((parte) => parte.texto);
-  return {
-    enunciado: `Complete: ${lacunado}`,
-    resposta: `${escondidas.join(" · ")}\n\n${limpo}`,
-  };
+  return saida + limpo.slice(cursor);
 }

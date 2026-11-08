@@ -1,10 +1,10 @@
 import { repo } from "./repo";
-import type { Bloco, Materia, PdfDoc, Questao } from "./types";
+import type { EditalTopico, Materia, PdfDoc, Questao } from "./types";
 
 export type Cartao = Questao & {
   materiaNome: string;
-  pdfNome: string;
-  blocoTitulo: string;
+  pdfNome: string | null;
+  topicoNome: string | null;
 };
 
 type Opcoes = {
@@ -13,40 +13,38 @@ type Opcoes = {
   questoes?: Questao[];
   materias?: Materia[];
   pdfs?: PdfDoc[];
-  blocos?: Bloco[];
+  topicos?: EditalTopico[];
 };
 
 /**
- * Questões com os nomes de matéria, PDF e bloco. Poucas consultas em lote,
- * em vez de uma por questão, o que pesa muito quando os dados vêm do Supabase.
+ * Cards com os nomes de matéria, PDF e tópico. Poucas consultas em lote,
+ * em vez de uma por card, o que pesa muito quando os dados vêm do Supabase.
  */
 export async function carregarCartoes(opcoes: Opcoes = {}): Promise<Cartao[]> {
-  const [questoes, materias, pdfs, blocos] = await Promise.all([
+  const [questoes, materias, pdfs, topicos] = await Promise.all([
     opcoes.questoes ??
       (opcoes.materiaIds
         ? Promise.all(opcoes.materiaIds.map((id) => repo.questoes.listarPorMateria(id))).then((listas) => listas.flat())
         : repo.questoes.listarTodas()),
     opcoes.materias ?? repo.materias.listar(),
     opcoes.pdfs ?? repo.pdfs.listarTodos(),
-    opcoes.blocos ?? repo.blocos.listarTodos(),
+    opcoes.topicos ?? repo.topicos.listarTodos(),
   ]);
-  return juntarCartoes(questoes, materias, pdfs, blocos);
+  return juntarCartoes(questoes, materias, pdfs, topicos);
 }
 
-export function juntarCartoes(questoes: Questao[], materias: Materia[], pdfs: PdfDoc[], blocos: Bloco[]): Cartao[] {
+export function juntarCartoes(questoes: Questao[], materias: Materia[], pdfs: PdfDoc[], topicos: EditalTopico[]): Cartao[] {
   const materiaPorId = new Map(materias.map((item) => [item.id, item]));
   const pdfPorId = new Map(pdfs.map((item) => [item.id, item]));
-  const blocoPorId = new Map(blocos.map((item) => [item.id, item]));
+  const topicoPorId = new Map(topicos.map((item) => [item.id, item]));
   return questoes.flatMap((questao) => {
-    const bloco = blocoPorId.get(questao.blocoId);
-    const pdf = pdfPorId.get(questao.pdfId);
     const materia = materiaPorId.get(questao.materiaId);
-    if (!bloco || !pdf || !materia) return [];
+    if (!materia) return [];
     const cartao: Cartao = {
       ...questao,
       materiaNome: materia.nome,
-      pdfNome: pdf.nome,
-      blocoTitulo: bloco.titulo,
+      pdfNome: questao.pdfId ? (pdfPorId.get(questao.pdfId)?.nome ?? null) : null,
+      topicoNome: questao.topicoId ? (topicoPorId.get(questao.topicoId)?.nome ?? null) : null,
     };
     return [cartao];
   });

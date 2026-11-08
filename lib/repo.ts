@@ -1,14 +1,13 @@
 // As telas só conversam com este módulo. Com URL e chave no .env.local,
 // os dados vão para o Supabase. Sem essas variáveis, ficam no IndexedDB.
 
+import { prepararCard } from "./cards";
 import { getDb } from "./db";
+import { ErroEstudo } from "./erros";
+import { validarFaixa } from "./faixa";
 import { repoRemoto } from "./repoRemoto";
 import { supabaseConfigurado } from "./supabase";
-import { ErroEstudo } from "./erros";
-import { blocoDaPagina, conflitoDeFaixa, descreverFaixa, validarFaixa } from "./faixa";
-import { somarDias } from "./datas";
 import type {
-  Bloco,
   CorGrifo,
   Edital,
   EditalMateria,
@@ -21,11 +20,10 @@ import type {
   PostIt,
   Questao,
   Rect,
-  StatusBloco,
   StatusRevisao,
   Tentativa,
+  TipoCard,
 } from "./types";
-import { MAX_QUESTOES } from "./types";
 
 function id() {
   return crypto.randomUUID();
@@ -37,26 +35,42 @@ function exigirNome(nome: string, vazio: string) {
   return limpo;
 }
 
-async function sincronizarAnotacoes(pdfId: string) {
-  const db = getDb();
-  const blocos = await db.blocos.where("pdfId").equals(pdfId).toArray();
-  const grifos = await db.grifos.where("pdfId").equals(pdfId).toArray();
-  const postits = await db.postits.where("pdfId").equals(pdfId).toArray();
-  await db.transaction("rw", db.grifos, db.postits, async () => {
-    for (const grifo of grifos) {
-      const blocoId = blocoDaPagina(blocos, grifo.pagina)?.id ?? null;
-      if (grifo.blocoId !== blocoId) await db.grifos.update(grifo.id, { blocoId });
-    }
-    for (const postit of postits) {
-      const blocoId = blocoDaPagina(blocos, postit.pagina)?.id ?? null;
-      if (postit.blocoId !== blocoId) await db.postits.update(postit.id, { blocoId });
-    }
-  });
+function limitar(valor: number, minimo: number, maximo: number) {
+  if (!Number.isFinite(valor)) return minimo;
+  return Math.min(maximo, Math.max(minimo, valor));
 }
 
-function ordenarBlocos(lista: Bloco[]) {
-  return lista.sort((a, b) => a.paginaInicio - b.paginaInicio || a.createdAt - b.createdAt);
+function limitarPeso(peso: number) {
+  if (!Number.isFinite(peso)) return 3;
+  return Math.min(5, Math.max(1, Math.round(peso)));
 }
+
+function validarLancamento(feitas: number, acertos: number) {
+  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
+    throw new ErroEstudo("Use números inteiros.");
+  }
+  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
+  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
+}
+
+type AgendaCard = {
+  sequencia: number;
+  proximaEm: number;
+  statusRevisao: StatusRevisao;
+  facilidade: number;
+  intervaloDias: number;
+};
+
+type EntradaCard = {
+  materiaId: string;
+  pdfId?: string | null;
+  pagina?: number | null;
+  topicoId?: string | null;
+  tipo?: TipoCard;
+  enunciado: string;
+  resposta: string;
+  imagem?: Blob;
+};
 
 const repoLocal = {
   materias: {
@@ -88,7 +102,6 @@ const repoLocal = {
         [
           db.materias,
           db.pdfs,
-          db.blocos,
           db.grifos,
           db.postits,
           db.questoes,
@@ -103,15 +116,12 @@ const repoLocal = {
           for (const pdf of pdfs) {
             await db.grifos.where("pdfId").equals(pdf.id).delete();
             await db.postits.where("pdfId").equals(pdf.id).delete();
-            await db.questoes.where("pdfId").equals(pdf.id).delete();
-            await db.tentativas.where("pdfId").equals(pdf.id).delete();
-            await db.blocos.where("pdfId").equals(pdf.id).delete();
           }
           await db.pdfs.where("materiaId").equals(idMateria).delete();
           await db.questoes.where("materiaId").equals(idMateria).delete();
           await db.tentativas.where("materiaId").equals(idMateria).delete();
           await db.editalMaterias.where("materiaId").equals(idMateria).delete();
-          await db.editalTopicos.where("materiaId").equals(idMateria).modify({ materiaId: null, blocoId: null });
+          await db.editalTopicos.where("materiaId").equals(idMateria).modify({ materiaId: null, pdfId: null });
           await db.lancamentos.where("materiaId").equals(idMateria).delete();
           await db.estudos.where("materiaId").equals(idMateria).modify({ materiaId: null });
           await db.materias.delete(idMateria);
@@ -159,135 +169,39 @@ const repoLocal = {
       const alterados = await getDb().pdfs.update(pdfId, { nome: limpo });
       if (!alterados) throw new ErroEstudo("PDF não encontrado.");
     },
+    async registrarLeitura(pdfId: string, pagina: number) {
+      const db = getDb();
+      await db.transaction("rw", db.pdfs, async () => {
+        const pdf = await db.pdfs.get(pdfId);
+        if (!pdf) return;
+        const ultima = limitar(Math.round(pagina), 1, pdf.numPages);
+        await db.pdfs.update(pdfId, { ultimaPagina: ultima, maiorPagina: Math.max(pdf.maiorPagina ?? 0, ultima) });
+      });
+    },
     async remover(pdfId: string) {
       const db = getDb();
-      await db.transaction("rw", [db.pdfs, db.blocos, db.grifos, db.postits, db.questoes, db.tentativas], async () => {
-        await db.grifos.where("pdfId").equals(pdfId).delete();
-        await db.postits.where("pdfId").equals(pdfId).delete();
-        await db.questoes.where("pdfId").equals(pdfId).delete();
-        await db.tentativas.where("pdfId").equals(pdfId).delete();
-        await db.blocos.where("pdfId").equals(pdfId).delete();
-        await db.pdfs.delete(pdfId);
-      });
-    },
-  },
-
-  blocos: {
-    async listarTodos() {
-      return ordenarBlocos(await getDb().blocos.toArray());
-    },
-    async listarPorPdf(pdfId: string) {
-      return ordenarBlocos(await getDb().blocos.where("pdfId").equals(pdfId).toArray());
-    },
-    async obter(blocoId: string): Promise<Bloco | null> {
-      return (await getDb().blocos.get(blocoId)) ?? null;
-    },
-    async criar(entrada: {
-      pdfId: string;
-      titulo: string;
-      paginaInicio: number;
-      paginaFim: number;
-    }) {
-      const db = getDb();
-      const pdf = await db.pdfs.get(entrada.pdfId);
-      if (!pdf) throw new ErroEstudo("PDF não encontrado.");
-      const erroFaixa = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
-      if (erroFaixa) throw new ErroEstudo(erroFaixa);
-      const existentes = await db.blocos.where("pdfId").equals(pdf.id).toArray();
-      const conflito = conflitoDeFaixa(existentes, entrada.paginaInicio, entrada.paginaFim);
-      if (conflito) {
-        throw new ErroEstudo(
-          `Esta faixa cruza "${conflito.titulo}" (${descreverFaixa(conflito.paginaInicio, conflito.paginaFim)}).`,
-        );
-      }
-      const titulo =
-        entrada.titulo.trim() ||
-        `Páginas ${entrada.paginaInicio}–${entrada.paginaFim}`;
-      const bloco: Bloco = {
-        id: id(),
-        pdfId: pdf.id,
-        titulo,
-        paginaInicio: entrada.paginaInicio,
-        paginaFim: entrada.paginaFim,
-        status: "estudando",
-        createdAt: Date.now(),
-      };
-      await db.blocos.add(bloco);
-      await sincronizarAnotacoes(pdf.id);
-      return bloco;
-    },
-    async atualizar(
-      blocoId: string,
-      entrada: { titulo: string; paginaInicio: number; paginaFim: number },
-    ) {
-      const db = getDb();
-      const bloco = await db.blocos.get(blocoId);
-      if (!bloco) throw new ErroEstudo("Bloco não encontrado.");
-      const pdf = await db.pdfs.get(bloco.pdfId);
-      if (!pdf) throw new ErroEstudo("PDF não encontrado.");
-      const erroFaixa = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
-      if (erroFaixa) throw new ErroEstudo(erroFaixa);
-      const existentes = await db.blocos.where("pdfId").equals(pdf.id).toArray();
-      const conflito = conflitoDeFaixa(
-        existentes,
-        entrada.paginaInicio,
-        entrada.paginaFim,
-        bloco.id,
+      await db.transaction(
+        "rw",
+        [db.pdfs, db.grifos, db.postits, db.questoes, db.tentativas, db.editalTopicos],
+        async () => {
+          await db.grifos.where("pdfId").equals(pdfId).delete();
+          await db.postits.where("pdfId").equals(pdfId).delete();
+          // Os cards ficam: o estudo que você fez não some junto com o arquivo.
+          await db.questoes.where("pdfId").equals(pdfId).modify({ pdfId: null });
+          await db.tentativas.where("pdfId").equals(pdfId).modify({ pdfId: null });
+          await db.editalTopicos
+            .where("pdfId")
+            .equals(pdfId)
+            .modify({ pdfId: null, paginaInicio: null, paginaFim: null });
+          await db.pdfs.delete(pdfId);
+        },
       );
-      if (conflito) {
-        throw new ErroEstudo(
-          `Esta faixa cruza "${conflito.titulo}" (${descreverFaixa(conflito.paginaInicio, conflito.paginaFim)}).`,
-        );
-      }
-      await db.blocos.update(bloco.id, {
-        titulo: exigirNome(entrada.titulo, "Dê um título ao bloco."),
-        paginaInicio: entrada.paginaInicio,
-        paginaFim: entrada.paginaFim,
-      });
-      await sincronizarAnotacoes(pdf.id);
-    },
-    async definirStatus(blocoId: string, status: StatusBloco) {
-      const alterados = await getDb().blocos.update(blocoId, { status });
-      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
-    },
-    async salvarResumo(blocoId: string, resumo: string) {
-      const alterados = await getDb().blocos.update(blocoId, { resumo: resumo.trim() });
-      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
-    },
-    async finalizar(blocoId: string, resumo: string) {
-      const limpo = exigirNome(resumo, "Resuma o bloco com as suas palavras antes de finalizar.");
-      const alterados = await getDb().blocos.update(blocoId, {
-        status: "finalizado",
-        resumo: limpo,
-        revisoes: 0,
-        proximaRevisaoEm: somarDias(Date.now(), 1),
-      });
-      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
-    },
-    async registrarRevisao(blocoId: string, entrada: { revisoes: number; proximaRevisaoEm: number }) {
-      const alterados = await getDb().blocos.update(blocoId, entrada);
-      if (!alterados) throw new ErroEstudo("Bloco não encontrado.");
-    },
-    async remover(blocoId: string) {
-      const db = getDb();
-      const bloco = await db.blocos.get(blocoId);
-      if (!bloco) return;
-      await db.transaction("rw", db.blocos, db.questoes, db.tentativas, async () => {
-        await db.questoes.where("blocoId").equals(blocoId).delete();
-        await db.tentativas.where("blocoId").equals(blocoId).delete();
-        await db.blocos.delete(blocoId);
-      });
-      await sincronizarAnotacoes(bloco.pdfId);
     },
   },
 
   grifos: {
     async listarPorPdf(pdfId: string) {
       const lista = await getDb().grifos.where("pdfId").equals(pdfId).toArray();
-      return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
-    },
-    async listarPorBloco(blocoId: string) {
-      const lista = await getDb().grifos.where("blocoId").equals(blocoId).toArray();
       return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
     async criar(entrada: {
@@ -309,11 +223,9 @@ const repoLocal = {
       if (entrada.pagina < 1 || entrada.pagina > pdf.numPages) {
         throw new ErroEstudo("Esta página não existe neste PDF.");
       }
-      const blocos = await db.blocos.where("pdfId").equals(pdf.id).toArray();
       const grifo: Grifo = {
         id: id(),
         pdfId: pdf.id,
-        blocoId: blocoDaPagina(blocos, entrada.pagina)?.id ?? null,
         pagina: entrada.pagina,
         texto,
         cor: entrada.cor,
@@ -334,10 +246,6 @@ const repoLocal = {
       const lista = await getDb().postits.where("pdfId").equals(pdfId).toArray();
       return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
     },
-    async listarPorBloco(blocoId: string) {
-      const lista = await getDb().postits.where("blocoId").equals(blocoId).toArray();
-      return lista.sort((a, b) => a.pagina - b.pagina || a.createdAt - b.createdAt);
-    },
     async criar(entrada: { pdfId: string; pagina: number; texto: string; x: number; y: number }) {
       const db = getDb();
       const pdf = await db.pdfs.get(entrada.pdfId);
@@ -347,11 +255,9 @@ const repoLocal = {
       if (entrada.pagina < 1 || entrada.pagina > pdf.numPages) {
         throw new ErroEstudo("Esta página não existe neste PDF.");
       }
-      const blocos = await db.blocos.where("pdfId").equals(pdf.id).toArray();
       const postit: PostIt = {
         id: id(),
         pdfId: pdf.id,
-        blocoId: blocoDaPagina(blocos, entrada.pagina)?.id ?? null,
         pagina: entrada.pagina,
         texto,
         x: limitar(entrada.x, 0.01, 0.98),
@@ -379,13 +285,9 @@ const repoLocal = {
   },
 
   questoes: {
-    async listarPorBloco(blocoId: string) {
-      const lista = await getDb().questoes.where("blocoId").equals(blocoId).toArray();
-      return lista.sort((a, b) => a.createdAt - b.createdAt);
-    },
     async listarPorPdf(pdfId: string) {
       const lista = await getDb().questoes.where("pdfId").equals(pdfId).toArray();
-      return lista.sort((a, b) => a.createdAt - b.createdAt);
+      return lista.sort((a, b) => (a.pagina ?? 0) - (b.pagina ?? 0) || a.createdAt - b.createdAt);
     },
     async listarPorMateria(materiaId: string) {
       const lista = await getDb().questoes.where("materiaId").equals(materiaId).toArray();
@@ -396,7 +298,9 @@ const repoLocal = {
       return lista.sort((a, b) => a.createdAt - b.createdAt);
     },
     async contarVencidas(agora = Date.now()): Promise<number> {
-      return getDb().questoes.filter((questao) => (questao.proximaEm ?? 0) <= agora).count();
+      return getDb()
+        .questoes.filter((questao) => !questao.suspensa && (questao.proximaEm ?? 0) <= agora)
+        .count();
     },
     async contarPorMateria(): Promise<Record<string, number>> {
       const contagem: Record<string, number> = {};
@@ -405,59 +309,58 @@ const repoLocal = {
       });
       return contagem;
     },
-    async criar(entrada: {
-      blocoId: string;
-      materiaId: string;
-      enunciado: string;
-      resposta: string;
-    }) {
+    async criar(entrada: EntradaCard) {
       const db = getDb();
-      const enunciado = exigirNome(entrada.enunciado, "Escreva o enunciado.");
-      const resposta = exigirNome(entrada.resposta, "Escreva a resposta.");
-      const bloco = await db.blocos.get(entrada.blocoId);
-      if (!bloco) throw new ErroEstudo("Bloco não encontrado.");
-      const pdf = await db.pdfs.get(bloco.pdfId);
-      if (!pdf || pdf.materiaId !== entrada.materiaId) {
-        throw new ErroEstudo("Este bloco não pertence a esta matéria.");
+      const tipo = entrada.tipo ?? "basico";
+      const textos = prepararCard(tipo, entrada.enunciado, entrada.resposta, Boolean(entrada.imagem));
+      const materia = await db.materias.get(entrada.materiaId);
+      if (!materia) throw new ErroEstudo("Matéria não encontrada.");
+      if (entrada.pdfId) {
+        const pdf = await db.pdfs.get(entrada.pdfId);
+        if (!pdf || pdf.materiaId !== materia.id) throw new ErroEstudo("Este PDF não pertence a esta matéria.");
       }
+      const agora = Date.now();
       const questao: Questao = {
         id: id(),
-        blocoId: bloco.id,
-        materiaId: pdf.materiaId,
-        pdfId: pdf.id,
-        enunciado,
-        resposta,
+        materiaId: materia.id,
+        pdfId: entrada.pdfId ?? null,
+        pagina: entrada.pagina ?? null,
+        topicoId: entrada.topicoId ?? null,
+        tipo,
+        enunciado: textos.enunciado,
+        resposta: textos.resposta,
+        ...(entrada.imagem ? { imagem: entrada.imagem } : {}),
+        suspensa: false,
         statusRevisao: "nova",
         sequencia: 0,
         facilidade: 2.5,
         intervaloDias: 0,
-        proximaEm: Date.now(),
-        createdAt: Date.now(),
+        proximaEm: agora,
+        createdAt: agora,
       };
-      await db.transaction("rw", db.questoes, async () => {
-        const quantidade = await db.questoes.where("blocoId").equals(bloco.id).count();
-        if (quantidade >= MAX_QUESTOES) {
-          throw new ErroEstudo(`Este bloco já tem ${MAX_QUESTOES} questões.`);
-        }
-        await db.questoes.add(questao);
-      });
+      await db.questoes.add(questao);
       return questao;
     },
-    async atualizar(questaoId: string, entrada: { enunciado: string; resposta: string }) {
-      const enunciado = exigirNome(entrada.enunciado, "Escreva o enunciado.");
-      const resposta = exigirNome(entrada.resposta, "Escreva a resposta.");
-      const alteradas = await getDb().questoes.update(questaoId, { enunciado, resposta });
+    async atualizar(
+      questaoId: string,
+      entrada: { enunciado: string; resposta: string; topicoId?: string | null },
+    ) {
+      const db = getDb();
+      const atual = await db.questoes.get(questaoId);
+      if (!atual) throw new ErroEstudo("Questão não encontrada.");
+      const textos = prepararCard(atual.tipo, entrada.enunciado, entrada.resposta, Boolean(atual.imagem));
+      await db.questoes.update(questaoId, {
+        ...textos,
+        ...(entrada.topicoId !== undefined ? { topicoId: entrada.topicoId } : {}),
+      });
+    },
+    async definirSuspensa(questaoId: string, suspensa: boolean) {
+      const alteradas = await getDb().questoes.update(questaoId, { suspensa });
       if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
     },
     async registrarJulgamento(
       questaoId: string,
-      entrada: {
-        sequencia: number;
-        proximaEm: number;
-        statusRevisao: StatusRevisao;
-        facilidade: number;
-        intervaloDias: number;
-      },
+      entrada: AgendaCard,
       tentativa: Omit<Tentativa, "questaoId" | "em">,
     ) {
       const db = getDb();
@@ -465,6 +368,13 @@ const repoLocal = {
         const alteradas = await db.questoes.update(questaoId, entrada);
         if (!alteradas) throw new ErroEstudo("Questão não encontrada.");
         await db.tentativas.put({ ...tentativa, questaoId, em: Date.now() });
+      });
+    },
+    async desfazerJulgamento(questaoId: string, anterior: AgendaCard, tentativaId: string) {
+      const db = getDb();
+      await db.transaction("rw", db.questoes, db.tentativas, async () => {
+        await db.questoes.update(questaoId, anterior);
+        await db.tentativas.delete(tentativaId);
       });
     },
     async remover(questaoId: string) {
@@ -511,7 +421,11 @@ const repoLocal = {
     },
     async remover(editalId: string) {
       const db = getDb();
-      await db.transaction("rw", db.editais, db.editalMaterias, db.editalTopicos, async () => {
+      await db.transaction("rw", db.editais, db.editalMaterias, db.editalTopicos, db.questoes, async () => {
+        const topicos = await db.editalTopicos.where("editalId").equals(editalId).toArray();
+        for (const topico of topicos) {
+          await db.questoes.where("topicoId").equals(topico.id).modify({ topicoId: null });
+        }
         await db.editalMaterias.where("editalId").equals(editalId).delete();
         await db.editalTopicos.where("editalId").equals(editalId).delete();
         await db.editais.delete(editalId);
@@ -571,7 +485,9 @@ const repoLocal = {
         materiaId: entrada.materiaId,
         nome: exigirNome(entrada.nome, "Dê um nome ao tópico."),
         peso: limitarPeso(entrada.peso),
-        blocoId: null,
+        pdfId: null,
+        paginaInicio: null,
+        paginaFim: null,
         feito: false,
         createdAt: Date.now(),
       };
@@ -580,16 +496,33 @@ const repoLocal = {
     },
     async atualizar(
       topicoId: string,
-      entrada: Partial<Pick<EditalTopico, "nome" | "peso" | "materiaId" | "blocoId" | "feito">>,
+      entrada: Partial<
+        Pick<EditalTopico, "nome" | "peso" | "materiaId" | "pdfId" | "paginaInicio" | "paginaFim" | "feito">
+      >,
     ) {
+      const db = getDb();
       const mudanca: Partial<EditalTopico> = { ...entrada };
       if (entrada.nome !== undefined) mudanca.nome = exigirNome(entrada.nome, "Dê um nome ao tópico.");
       if (entrada.peso !== undefined) mudanca.peso = limitarPeso(entrada.peso);
-      const alterados = await getDb().editalTopicos.update(topicoId, mudanca);
+      if (entrada.pdfId === null) {
+        mudanca.paginaInicio = null;
+        mudanca.paginaFim = null;
+      }
+      if (entrada.pdfId && entrada.paginaInicio != null && entrada.paginaFim != null) {
+        const pdf = await db.pdfs.get(entrada.pdfId);
+        if (!pdf) throw new ErroEstudo("PDF não encontrado.");
+        const erro = validarFaixa(entrada.paginaInicio, entrada.paginaFim, pdf.numPages);
+        if (erro) throw new ErroEstudo(erro);
+      }
+      const alterados = await db.editalTopicos.update(topicoId, mudanca);
       if (!alterados) throw new ErroEstudo("Tópico não encontrado.");
     },
     async remover(topicoId: string) {
-      await getDb().editalTopicos.delete(topicoId);
+      const db = getDb();
+      await db.transaction("rw", db.editalTopicos, db.questoes, async () => {
+        await db.questoes.where("topicoId").equals(topicoId).modify({ topicoId: null });
+        await db.editalTopicos.delete(topicoId);
+      });
     },
   },
 
@@ -640,24 +573,6 @@ const repoLocal = {
     },
   },
 };
-
-function limitarPeso(peso: number) {
-  if (!Number.isFinite(peso)) return 3;
-  return Math.min(5, Math.max(1, Math.round(peso)));
-}
-
-function validarLancamento(feitas: number, acertos: number) {
-  if (!Number.isInteger(feitas) || !Number.isInteger(acertos)) {
-    throw new ErroEstudo("Use números inteiros.");
-  }
-  if (feitas < 1) throw new ErroEstudo("Informe quantas questões você fez.");
-  if (acertos < 0 || acertos > feitas) throw new ErroEstudo("Os acertos não podem passar do total.");
-}
-
-function limitar(valor: number, minimo: number, maximo: number) {
-  if (!Number.isFinite(valor)) return minimo;
-  return Math.min(maximo, Math.max(minimo, valor));
-}
 
 function escolherRepo() {
   return supabaseConfigurado() ? repoRemoto : repoLocal;

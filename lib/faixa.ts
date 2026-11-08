@@ -1,37 +1,3 @@
-import type { Bloco } from "./types";
-
-export function faixasCruzam(
-  inicioA: number,
-  fimA: number,
-  inicioB: number,
-  fimB: number,
-) {
-  return inicioA <= fimB && inicioB <= fimA;
-}
-
-export function blocoDaPagina(blocos: Bloco[], pagina: number) {
-  return (
-    blocos.find(
-      (bloco) => pagina >= bloco.paginaInicio && pagina <= bloco.paginaFim,
-    ) ?? null
-  );
-}
-
-export function conflitoDeFaixa(
-  blocos: Bloco[],
-  inicio: number,
-  fim: number,
-  ignorarId?: string,
-) {
-  return (
-    blocos.find(
-      (bloco) =>
-        bloco.id !== ignorarId &&
-        faixasCruzam(inicio, fim, bloco.paginaInicio, bloco.paginaFim),
-    ) ?? null
-  );
-}
-
 export function descreverFaixa(inicio: number, fim: number) {
   return inicio === fim ? `página ${inicio}` : `páginas ${inicio}–${fim}`;
 }

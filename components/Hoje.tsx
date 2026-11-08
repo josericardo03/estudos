@@ -7,29 +7,53 @@ import { formatarData, formatarDuracao } from "@/lib/datas";
 import { montarDesempenho } from "@/lib/desempenho";
 import { descreverProva, diasAteProva, diasAteProvaPorMateria } from "@/lib/edital";
 import { resumirEstudo } from "@/lib/estudo";
-import { montarPlano } from "@/lib/plano";
-import { usePreferencia } from "@/lib/preferencias";
+import { montarPlano, planoManual, type ItemPlano } from "@/lib/plano";
+import { gravarBruto, usePreferencia, useBruto } from "@/lib/preferencias";
 import { repo } from "@/lib/repo";
-import { estaDevida, filaDeHoje, proximaData } from "@/lib/revisao";
-import { caminhoBloco, caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import {
+  estaDevida,
+  filaDeHoje,
+  LIMITE_NOVOS_PADRAO,
+  LIMITE_REVISOES_PADRAO,
+  proximaData,
+} from "@/lib/revisao";
+import { caminhoMateria, caminhoPdf } from "@/lib/rotas";
+import type { Materia } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
 import { Abrindo, Aviso } from "./ui";
-import { RevisaoBloco } from "./RevisaoBloco";
 import { SessaoRevisao } from "./SessaoRevisao";
 
 const ADIANTADO = 15;
+const CHAVE_PLANO_MANUAL = "foco.planoManual";
+
+function lerPlanoManual(bruto: string | null): Record<string, number> {
+  if (!bruto) return {};
+  try {
+    const dado = JSON.parse(bruto) as Record<string, unknown>;
+    const resultado: Record<string, number> = {};
+    for (const [chave, valor] of Object.entries(dado)) {
+      if (typeof valor === "number" && valor > 0) resultado[chave] = valor;
+    }
+    return resultado;
+  } catch {
+    return {};
+  }
+}
 
 export function Hoje() {
   const [materiaFiltro, setMateriaFiltro] = useState("");
   const [sessao, setSessao] = useState<string[] | null>(null);
   const [metaMinutos] = usePreferencia<number>("foco.metaDiariaMin", 180);
+  const [limiteNovos, definirLimiteNovos] = usePreferencia<number>("foco.limiteNovos", LIMITE_NOVOS_PADRAO);
+  const [limiteRevisoes, definirLimiteRevisoes] = usePreferencia<number>("foco.limiteRevisoes", LIMITE_REVISOES_PADRAO);
+  const [modoPlano, definirModoPlano] = usePreferencia<"auto" | "manual">("foco.planoModo", "auto");
+  const planoManualBruto = useBruto(CHAVE_PLANO_MANUAL);
 
   const { dados, pronto, erro } = useConsulta(async () => {
-    const [materias, pdfs, blocos, questoes, tentativas, editais, vinculos, topicos, estudos, lancamentos] =
+    const [materias, pdfs, questoes, tentativas, editais, vinculos, topicos, estudos, lancamentos] =
       await Promise.all([
         repo.materias.listar(),
         repo.pdfs.listarTodos(),
-        repo.blocos.listarTodos(),
         repo.questoes.listarTodas(),
         repo.tentativas.listar(),
         repo.editais.listar(),
@@ -39,47 +63,33 @@ export function Hoje() {
         repo.lancamentos.listar(),
       ]);
     const agora = Date.now();
-    const cartoes = juntarCartoes(questoes, materias, pdfs, blocos);
-    const pdfPorId = new Map(pdfs.map((pdf) => [pdf.id, pdf]));
-    const materiaPorId = new Map(materias.map((materia) => [materia.id, materia]));
+    const cartoes = juntarCartoes(questoes, materias, pdfs, topicos);
     const desempenho = montarDesempenho({
       materias,
       pdfs,
-      blocos,
+      topicos,
       questoes,
       tentativas,
       lancamentos,
       agora,
       caminhoMateria,
-      caminhoPdf: caminhoPdf,
-      caminhoBloco,
+      caminhoPdf,
+      caminhoTopico: (editalId) => `/editais/${editalId}`,
     });
-    const blocosParaRever = blocos
-      .filter((bloco) => bloco.status === "finalizado" && bloco.proximaRevisaoEm && bloco.proximaRevisaoEm <= agora)
-      .sort((a, b) => (a.proximaRevisaoEm ?? 0) - (b.proximaRevisaoEm ?? 0))
-      .flatMap((bloco) => {
-        const pdf = pdfPorId.get(bloco.pdfId);
-        const materia = pdf ? materiaPorId.get(pdf.materiaId) : undefined;
-        if (!pdf || !materia) return [];
-        return [{ bloco, materiaId: materia.id, contexto: `${pdf.nome} · ${materia.nome}` }];
-      });
     const provas = editais
       .filter((edital) => edital.dataProva && (diasAteProva(edital.dataProva, agora) ?? -1) >= 0)
       .sort((a, b) => (a.dataProva ?? 0) - (b.dataProva ?? 0));
     return {
       agora,
       materias,
-      blocos,
       questoes,
       topicos,
       cartoes,
       tentativas,
       desempenho,
-      blocosParaRever,
       provas,
       diasProva: diasAteProvaPorMateria(editais, vinculos, agora),
       estudo: resumirEstudo(estudos, agora),
-      temAlgo: materias.length > 0,
     };
   }, [], null);
 
@@ -88,24 +98,26 @@ export function Hoje() {
   if (!dados) return null;
 
   const filtrados = dados.cartoes.filter((cartao) => !materiaFiltro || cartao.materiaId === materiaFiltro);
-  const fila = filaDeHoje(filtrados, dados.tentativas, dados.agora);
+  const dia = filaDeHoje(filtrados, dados.tentativas, { agora: dados.agora, limiteNovos, limiteRevisoes });
   const totalVencidas = dados.cartoes.filter((cartao) => estaDevida(cartao, dados.agora)).length;
   const proxima = proximaData(filtrados, dados.agora);
   const adiantadas = filtrados
-    .filter((cartao) => !estaDevida(cartao, dados.agora))
+    .filter((cartao) => !estaDevida(cartao, dados.agora) && !cartao.suspensa)
     .sort((a, b) => (a.proximaEm ?? 0) - (b.proximaEm ?? 0))
     .slice(0, ADIANTADO);
-  const plano = montarPlano({
+  const planoAutomatico = montarPlano({
     materias: dados.materias,
     questoes: dados.questoes,
     topicos: dados.topicos,
-    blocos: dados.blocos,
     desempenho: dados.desempenho.materias,
     minutosDia: metaMinutos,
     agora: dados.agora,
   });
+  const minutosManuais = lerPlanoManual(planoManualBruto);
+  const plano = modoPlano === "manual" ? planoManual(dados.materias, minutosManuais) : planoAutomatico;
   const hojeSegundos = dados.estudo.hoje;
   const metaSegundos = metaMinutos * 60;
+  const ficaram = dia.ficaramNovas + dia.ficaramRevisoes;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-5 py-10">
@@ -141,12 +153,16 @@ export function Hoje() {
         <>
           <div className="mt-8 grid gap-3 sm:grid-cols-4">
             <article className="cartao p-4">
-              <p className="text-sm text-muted">Questões vencidas</p>
+              <p className="text-sm text-muted">Cards vencidos</p>
               <p className="mt-2 font-serif text-4xl">{totalVencidas}</p>
             </article>
             <article className="cartao p-4">
-              <p className="text-sm text-muted">Blocos para reler</p>
-              <p className="mt-2 font-serif text-4xl">{dados.blocosParaRever.length}</p>
+              <p className="text-sm text-muted">Revisados hoje</p>
+              <p className="mt-2 font-serif text-4xl">{dia.feitoHoje.novos + dia.feitoHoje.revisoes}</p>
+              <p className="mt-1 text-xs text-muted">
+                {dia.feitoHoje.novos} {dia.feitoHoje.novos === 1 ? "novo" : "novos"} · {dia.feitoHoje.revisoes}{" "}
+                {dia.feitoHoje.revisoes === 1 ? "revisão" : "revisões"}
+              </p>
             </article>
             <article className="cartao p-4">
               <p className="text-sm text-muted">Estudado hoje</p>
@@ -162,7 +178,7 @@ export function Hoje() {
             </article>
           </div>
 
-          {!dados.temAlgo ? (
+          {dados.materias.length === 0 ? (
             <p className="mt-10 text-muted">
               Nada por aqui ainda. Comece criando uma matéria e enviando o PDF que você está estudando.{" "}
               <Link href="/" className="text-pine no-underline hover:underline">
@@ -195,30 +211,36 @@ export function Hoje() {
                 </select>
               </div>
             </div>
-            {fila.length > 0 ? (
+            {dia.fila.length > 0 ? (
               <>
                 <p className="mt-3 text-muted">
-                  {fila.length} {fila.length === 1 ? "questão venceu" : "questões venceram"}. As matérias se alternam
-                  e quem você errou com certeza vem primeiro.
+                  {dia.revisoes} {dia.revisoes === 1 ? "revisão" : "revisões"} e {dia.novas}{" "}
+                  {dia.novas === 1 ? "card novo" : "cards novos"}. As matérias se alternam, e o que você errou com
+                  certeza vem primeiro.
+                  {ficaram > 0
+                    ? ` Mais ${ficaram} ${ficaram === 1 ? "fica" : "ficam"} para outro dia, pelo limite diário.`
+                    : ""}
                 </p>
                 <button
                   type="button"
                   className="btn btn-primario mt-4"
-                  onClick={() => setSessao(fila.map((cartao) => cartao.id))}
+                  onClick={() => setSessao(dia.fila.map((cartao) => cartao.id))}
                 >
-                  Começar revisão ({fila.length})
+                  Começar revisão ({dia.fila.length})
                 </button>
               </>
             ) : (
               <>
                 <p className="mt-3 text-muted">
                   {filtrados.length === 0
-                    ? "Nenhuma questão aqui ainda. Elas entram quando você as salva num bloco."
-                    : proxima
-                      ? `Tudo em dia. A próxima revisão é ${formatarData(proxima, { weekday: "long", day: "numeric", month: "long" })}.`
-                      : "Tudo em dia."}
+                    ? "Nenhum card aqui ainda. Selecione um trecho no leitor e crie o primeiro."
+                    : ficaram > 0
+                      ? "Você já bateu o limite de hoje. Aumente o limite abaixo se quiser continuar."
+                      : proxima
+                        ? `Tudo em dia. A próxima revisão é ${formatarData(proxima, { weekday: "long", day: "numeric", month: "long" })}.`
+                        : "Tudo em dia."}
                 </p>
-                {adiantadas.length > 0 ? (
+                {adiantadas.length > 0 && ficaram === 0 ? (
                   <button
                     type="button"
                     className="btn mt-4"
@@ -229,68 +251,171 @@ export function Hoje() {
                 ) : null}
               </>
             )}
+
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm text-muted">Limites por dia</summary>
+              <div className="mt-3 flex flex-wrap gap-4">
+                <div>
+                  <label className="rotulo" htmlFor="limite-novos">
+                    Cards novos
+                  </label>
+                  <input
+                    id="limite-novos"
+                    className="campo w-28"
+                    type="number"
+                    min={0}
+                    max={500}
+                    inputMode="numeric"
+                    value={limiteNovos}
+                    onChange={(evento) => {
+                      const valor = Number(evento.target.value);
+                      if (Number.isFinite(valor) && valor >= 0 && valor <= 500) definirLimiteNovos(Math.round(valor));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="rotulo" htmlFor="limite-revisoes">
+                    Revisões
+                  </label>
+                  <input
+                    id="limite-revisoes"
+                    className="campo w-28"
+                    type="number"
+                    min={0}
+                    max={2000}
+                    inputMode="numeric"
+                    value={limiteRevisoes}
+                    onChange={(evento) => {
+                      const valor = Number(evento.target.value);
+                      if (Number.isFinite(valor) && valor >= 0 && valor <= 2000) definirLimiteRevisoes(Math.round(valor));
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                Como no Anki: o que passa do limite fica para o dia seguinte e não se perde.
+              </p>
+            </details>
           </section>
 
-          {dados.blocosParaRever.length > 0 ? (
-            <section className="mt-10" aria-labelledby="titulo-releitura">
-              <h2 id="titulo-releitura" className="font-serif text-3xl">
-                Blocos para reler
-              </h2>
-              <p className="mt-2 text-sm text-muted">
-                Blocos finalizados voltam em 1, 7, 30 e 90 dias. Releia com as palavras-chave escondidas.
-              </p>
-              <ul className="cartao mt-4 divide-y divide-line px-4 py-4">
-                {dados.blocosParaRever.map((item) => (
-                  <RevisaoBloco key={item.bloco.id} bloco={item.bloco} materiaId={item.materiaId} contexto={item.contexto} />
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          {plano.length > 0 ? (
-            <section className="mt-10" aria-labelledby="titulo-plano">
-              <h2 id="titulo-plano" className="font-serif text-3xl">
-                Plano de hoje
-              </h2>
-              <p className="mt-2 text-sm text-muted">
-                {formatarDuracao(metaSegundos)} divididos pelo peso no edital, pelos tópicos pendentes, pela taxa de acerto
-                e pelas questões vencidas.{" "}
-                <Link href="/estudo" className="text-pine no-underline hover:underline">
-                  Mudar a meta
-                </Link>
-              </p>
-              <ul className="cartao mt-4 divide-y divide-line px-4 py-2">
-                {plano.map((item) => (
-                  <li key={item.materiaId} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                    <div className="min-w-0">
-                      <Link
-                        href={caminhoMateria(item.materiaId)}
-                        className="break-words font-medium text-ink no-underline hover:underline"
-                      >
-                        {item.nome}
-                      </Link>
-                      <p className="mt-1 text-sm text-muted">{item.motivo}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-serif text-2xl">{item.minutos} min</span>
-                      <Link href={`/estudo?materia=${item.materiaId}`} className="btn">
-                        Cronometrar
-                      </Link>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          {dados.blocos.length > 0 ? (
-            <p className="mt-10 text-sm text-muted">
-              Dica: ao finalizar um bloco você escreve um resumo e ele entra na agenda de releitura. Os grifos viram
-              pergunta com o botão “Virar questão”.
-            </p>
+          {dados.materias.length > 0 ? (
+            <PlanoDoDia
+              plano={plano}
+              modo={modoPlano}
+              onModo={definirModoPlano}
+              materias={dados.materias}
+              minutos={minutosManuais}
+              metaSegundos={metaSegundos}
+            />
           ) : null}
         </>
       )}
     </main>
+  );
+}
+
+function PlanoDoDia({
+  plano,
+  modo,
+  onModo,
+  materias,
+  minutos,
+  metaSegundos,
+}: {
+  plano: ItemPlano[];
+  modo: "auto" | "manual";
+  onModo: (modo: "auto" | "manual") => void;
+  materias: Materia[];
+  minutos: Record<string, number>;
+  metaSegundos: number;
+}) {
+  function mudarMinutos(materiaId: string, texto: string) {
+    const valor = Number(texto);
+    const proximos = { ...minutos };
+    if (!texto.trim() || !Number.isFinite(valor) || valor <= 0) delete proximos[materiaId];
+    else proximos[materiaId] = Math.min(720, Math.round(valor));
+    gravarBruto(CHAVE_PLANO_MANUAL, JSON.stringify(proximos));
+  }
+
+  return (
+    <section className="mt-10" aria-labelledby="titulo-plano">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <h2 id="titulo-plano" className="font-serif text-3xl">
+          Plano de hoje
+        </h2>
+        <div className="flex gap-2" role="group" aria-label="Como montar o plano">
+          <button type="button" className="btn btn-seletor" aria-pressed={modo === "auto"} onClick={() => onModo("auto")}>
+            Automático
+          </button>
+          <button type="button" className="btn btn-seletor" aria-pressed={modo === "manual"} onClick={() => onModo("manual")}>
+            O meu (Guru Já)
+          </button>
+        </div>
+      </div>
+      {modo === "auto" ? (
+        <p className="mt-2 text-sm text-muted">
+          {formatarDuracao(metaSegundos)} divididos pelo peso no edital, pelos tópicos pendentes, pela taxa de acerto e
+          pelos cards vencidos.{" "}
+          <Link href="/estudo" className="text-pine no-underline hover:underline">
+            Mudar a meta
+          </Link>
+        </p>
+      ) : (
+        <>
+          <p className="mt-2 text-sm text-muted">
+            Digite os minutos que o seu planejamento (por exemplo, o do Guru Já) manda estudar em cada matéria hoje.
+            Fica guardado neste aparelho.
+          </p>
+          <ul className="mt-3 grid gap-2">
+            {materias.map((materia) => (
+              <li key={materia.id} className="flex items-center justify-between gap-3">
+                <label htmlFor={`min-${materia.id}`} className="min-w-0 break-words">
+                  {materia.nome}
+                </label>
+                <span className="flex shrink-0 items-center gap-2">
+                  <input
+                    id={`min-${materia.id}`}
+                    className="campo w-24"
+                    type="number"
+                    min={0}
+                    max={720}
+                    inputMode="numeric"
+                    value={minutos[materia.id] ?? ""}
+                    placeholder="0"
+                    onChange={(evento) => mudarMinutos(materia.id, evento.target.value)}
+                  />
+                  <span className="text-sm text-muted">min</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {plano.length > 0 ? (
+        <ul className="cartao mt-4 divide-y divide-line px-4 py-2">
+          {plano.map((item) => (
+            <li key={item.materiaId} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <Link
+                  href={caminhoMateria(item.materiaId)}
+                  className="break-words font-medium text-ink no-underline hover:underline"
+                >
+                  {item.nome}
+                </Link>
+                <p className="mt-1 text-sm text-muted">{item.motivo}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="font-serif text-2xl">{item.minutos} min</span>
+                <Link href={`/estudo?materia=${item.materiaId}`} className="btn">
+                  Cronometrar
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : modo === "manual" ? (
+        <p className="mt-4 text-sm text-muted">Preencha os minutos acima para ver o plano.</p>
+      ) : null}
+    </section>
   );
 }

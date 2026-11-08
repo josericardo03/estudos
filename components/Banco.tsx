@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ocultarLacunas, resumoDoCard, textoRevelado } from "@/lib/cards";
 import { carregarCartoes, type Cartao } from "@/lib/cartoes";
 import { formatarData } from "@/lib/datas";
 import { diasAteProvaPorMateria } from "@/lib/edital";
@@ -20,11 +21,11 @@ import {
   proximaData,
   separarSimulado,
 } from "@/lib/revisao";
-import { caminhoBloco } from "@/lib/rotas";
+import { caminhoPdf } from "@/lib/rotas";
 import type { Confianca, Materia, MotivoErro, Tentativa } from "@/lib/types";
 import { CONFIANCAS, MOTIVOS_ERRO, STATUS_REVISAO } from "@/lib/types";
 import { useConsulta } from "@/lib/useConsulta";
-import { Abrindo, Aviso } from "./ui";
+import { Abrindo, Aviso, Confirmar } from "./ui";
 
 const CHAVE_SIMULADO = "foco.simulado";
 const VALIDADE_SIMULADO = 3 * 86_400_000;
@@ -47,6 +48,25 @@ function embaralhar<T>(lista: T[]) {
 
 type Modo = "simulado" | "questoes";
 
+function origemDoCard(cartao: Cartao) {
+  return [
+    cartao.materiaNome,
+    cartao.topicoNome,
+    cartao.pdfNome ? `${cartao.pdfNome}${cartao.pagina ? ` · p. ${cartao.pagina}` : ""}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function frenteDoSimulado(cartao: Cartao) {
+  return cartao.tipo === "lacuna" ? ocultarLacunas(cartao.enunciado) : cartao.enunciado;
+}
+
+function versoDoSimulado(cartao: Cartao) {
+  if (cartao.tipo !== "lacuna") return cartao.resposta;
+  return cartao.resposta ? `${textoRevelado(cartao.enunciado)}\n\n${cartao.resposta}` : textoRevelado(cartao.enunciado);
+}
+
 export function Banco() {
   const parametros = useSearchParams();
   const router = useRouter();
@@ -63,11 +83,11 @@ export function Banco() {
       <p className="olho">Questões</p>
       <h1 className="mt-2 font-serif text-5xl tracking-tight">Banco</h1>
       <p className="mt-3 max-w-xl text-muted">
-        As questões entram aqui quando você as salva num bloco. A revisão do dia fica em{" "}
+        Os cards nascem no leitor, a partir de um trecho que você seleciona. A revisão do dia fica em{" "}
         <Link href="/hoje" className="text-pine no-underline hover:underline">
           Hoje
         </Link>
-        . Aqui você monta um simulado ou confere a agenda de cada questão.
+        . Aqui você monta um simulado ou confere a agenda de cada card.
       </p>
       <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Modo do banco">
         <button type="button" className="btn btn-seletor" aria-pressed={modo === "simulado"} onClick={() => setModo("simulado")}>
@@ -136,7 +156,7 @@ function Lista({ materiaId }: { materiaId: string }) {
   if (!dados || dados.cartoes.length === 0) {
     return (
       <p className="mt-8 text-muted">
-        Nenhuma questão neste filtro. Elas aparecem aqui quando você salva uma questão num bloco.
+        Nenhum card neste filtro. Selecione um trecho no leitor e crie o primeiro.
       </p>
     );
   }
@@ -152,34 +172,51 @@ function Lista({ materiaId }: { materiaId: string }) {
         Só as vencidas
       </label>
       <p className="mt-3 text-sm text-muted">
-        {ordenadas.length} de {dados.cartoes.length} {dados.cartoes.length === 1 ? "questão" : "questões"}, da mais atrasada
-        para a mais distante.
+        {ordenadas.length} de {dados.cartoes.length} {dados.cartoes.length === 1 ? "card" : "cards"}, do mais atrasado
+        para o mais distante.
       </p>
       <ul className="mt-4 flex flex-col gap-3">
         {ordenadas.map((cartao) => {
           const vencida = estaDevida(cartao, dados.agora);
+          const origem = origemDoCard(cartao);
           const status = STATUS_REVISAO.find((item) => item.id === cartao.statusRevisao)?.nome;
           return (
             <li key={cartao.id} className="cartao p-4">
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
-                <span>
-                  {cartao.materiaNome} · {cartao.blocoTitulo}
-                </span>
+                <span>{origem}</span>
                 <span className={vencida ? "selo selo-alta" : "selo"}>
-                  {vencida ? "Vencida" : descreverVolta(cartao.proximaEm ?? 0, dados.agora)}
+                  {cartao.suspensa
+                    ? "Suspenso"
+                    : vencida
+                      ? "Vencido"
+                      : descreverVolta(cartao.proximaEm ?? 0, dados.agora)}
                 </span>
               </div>
-              <p className="mt-2 whitespace-pre-wrap font-serif text-xl leading-snug">{cartao.enunciado}</p>
+              <p className="mt-2 whitespace-pre-wrap font-serif text-xl leading-snug">
+                {resumoDoCard(cartao.tipo, cartao.enunciado, 220) || "(card só com imagem)"}
+              </p>
               <p className="mt-2 text-sm text-muted">
                 {status} · {dados.contagem.get(cartao.id) ?? 0} {dados.contagem.get(cartao.id) === 1 ? "tentativa" : "tentativas"}
                 {cartao.intervaloDias ? ` · intervalo de ${cartao.intervaloDias} dias` : ""}
               </p>
-              <Link
-                href={caminhoBloco(cartao.materiaId, cartao.pdfId, cartao.blocoId)}
-                className="mt-2 inline-block text-sm text-pine no-underline hover:underline"
-              >
-                Abrir bloco
-              </Link>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                {cartao.pdfId ? (
+                  <Link
+                    href={caminhoPdf(cartao.materiaId, cartao.pdfId, cartao.pagina ?? undefined)}
+                    className="text-pine no-underline hover:underline"
+                  >
+                    Abrir no PDF
+                  </Link>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void repo.questoes.definirSuspensa(cartao.id, !cartao.suspensa)}
+                >
+                  {cartao.suspensa ? "Reativar" : "Suspender"}
+                </button>
+                <Confirmar rotulo="Excluir" confirmar="Excluir card" onConfirmar={() => repo.questoes.remover(cartao.id)} />
+              </div>
             </li>
           );
         })}
@@ -316,7 +353,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
     try {
       const [cartoes, tentativas] = await Promise.all([carregarCartoes({ materiaIds: ids }), repo.tentativas.listar()]);
       if (!cartoes.length) {
-        setErro("Nenhuma questão nessas matérias.");
+        setErro("Nenhum card nessas matérias.");
         return;
       }
       const { entram, esperando } = separarSimulado(cartoes);
@@ -325,7 +362,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
         const data = quando ? formatarData(quando, { day: "numeric", month: "long" }) : "";
         setErro(
           data
-            ? `Nada no banco para agora. As questões que você acertou voltam a partir de ${data}.`
+            ? `Nada no banco para agora. Os cards que você acertou voltam a partir de ${data}.`
             : "Nada no banco para agora.",
         );
         return;
@@ -359,9 +396,10 @@ function Simulado({ materias }: { materias: Materia[] }) {
     try {
       await repo.questoes.registrarJulgamento(questao.id, agenda, {
         id: idTentativa,
-        pdfId: questao.pdfId,
         materiaId: questao.materiaId,
-        blocoId: questao.blocoId,
+        pdfId: questao.pdfId,
+        topicoId: questao.topicoId,
+        pagina: questao.pagina,
         acertou,
         nota,
         ...(confianca ? { confianca } : {}),
@@ -370,9 +408,10 @@ function Simulado({ materias }: { materias: Materia[] }) {
       const registrada: Tentativa = {
         id: idTentativa,
         questaoId: questao.id,
-        pdfId: questao.pdfId,
         materiaId: questao.materiaId,
-        blocoId: questao.blocoId,
+        pdfId: questao.pdfId,
+        topicoId: questao.topicoId,
+        pagina: questao.pagina,
         acertou,
         nota,
         ...(confianca ? { confianca } : {}),
@@ -417,7 +456,7 @@ function Simulado({ materias }: { materias: Materia[] }) {
         <fieldset>
           <legend className="rotulo">Matérias do simulado</legend>
           <p className="mb-3 text-sm text-muted">
-            As vagas se dividem entre as matérias. Em cada uma, um quarto é erro, metade é questão em aprendizado e um quarto é dominada que já voltou. Se faltar alguma, a vaga passa adiante.
+            As vagas se dividem entre as matérias. Em cada uma, um quarto é erro, metade é card em aprendizado e um quarto é dominada que já voltou. Se faltar alguma, a vaga passa adiante.
           </p>
           <label className="flex items-center gap-3 rounded-xl bg-sheet px-3 py-2">
             <input
@@ -477,14 +516,14 @@ function Simulado({ materias }: { materias: Materia[] }) {
             return (
               <li key={questao.id} className="cartao p-4">
                 <p className="text-sm text-muted">
-                  {posicao + 1}. {questao.materiaNome} · {questao.blocoTitulo}
+                  {posicao + 1}. {origemDoCard(questao)}
                 </p>
-                <h2 className="mt-2 whitespace-pre-wrap font-serif text-2xl leading-snug">{questao.enunciado}</h2>
+                <h2 className="mt-2 whitespace-pre-wrap font-serif text-2xl leading-snug">{frenteDoSimulado(questao)}</h2>
                 {emGargalo.has(questao.id) ? <AvisoGargalo /> : null}
                 <p className="mt-4 text-sm text-muted">Sua resposta</p>
                 <p className="mt-1 whitespace-pre-wrap">{rascunhos[questao.id]?.trim() || "Em branco"}</p>
                 <p className="mt-4 text-sm text-muted">Gabarito</p>
-                <p className="mt-1 whitespace-pre-wrap font-serif text-xl leading-relaxed">{questao.resposta}</p>
+                <p className="mt-1 whitespace-pre-wrap font-serif text-xl leading-relaxed">{versoDoSimulado(questao)}</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -547,16 +586,14 @@ function Simulado({ materias }: { materias: Materia[] }) {
   return (
     <div className="mt-6">
       <p className="text-sm text-muted">
-        Questão {Math.min(indice, prova.length - 1) + 1} de {prova.length}. O gabarito aparece no fim.
+        Card {Math.min(indice, prova.length - 1) + 1} de {prova.length}. O gabarito aparece no fim.
         {pedido !== null && pedido > prova.length ? ` Você pediu ${pedido}. Há ${prova.length} no banco agora.` : ""}
         {sobraram > 0 ? ` ${sobraram} ${sobraram === 1 ? "continua" : "continuam"} no banco para o próximo simulado.` : ""}
         {deFora > 0 ? ` ${deFora} ${deFora === 1 ? "ficou" : "ficaram"} para depois, porque você acertou.` : ""}
       </p>
       <article className="cartao mt-3 p-5" key={atual.id}>
-        <p className="text-sm text-muted">
-          {atual.materiaNome} · {atual.blocoTitulo}
-        </p>
-        <h2 className="mt-4 whitespace-pre-wrap font-serif text-3xl leading-snug">{atual.enunciado}</h2>
+        <p className="text-sm text-muted">{origemDoCard(atual)}</p>
+        <h2 className="mt-4 whitespace-pre-wrap font-serif text-3xl leading-snug">{frenteDoSimulado(atual)}</h2>
         {emGargalo.has(atual.id) ? <AvisoGargalo /> : null}
         <label className="rotulo mt-6" htmlFor="resposta-simulado">
           Sua resposta

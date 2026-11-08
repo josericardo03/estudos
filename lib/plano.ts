@@ -1,8 +1,7 @@
-import { topicoCoberto } from "./edital";
-import { estaDevida } from "./revisao";
 import type { GrupoMateria } from "./desempenho";
 import { porcentagem } from "./desempenho";
-import type { Bloco, EditalTopico, Materia, Questao } from "./types";
+import { estaDevida } from "./revisao";
+import type { EditalTopico, Materia, Questao } from "./types";
 
 export type ItemPlano = {
   materiaId: string;
@@ -17,19 +16,17 @@ const MINIMO = 10;
 /**
  * Reparte o tempo do dia entre as matérias.
  * Pesa mais quem vale mais no edital, tem mais tópicos pendentes, está com a
- * taxa de acerto mais baixa e tem mais questões vencidas.
+ * taxa de acerto mais baixa e tem mais cards vencidos.
  */
 export function montarPlano(entrada: {
   materias: Materia[];
   questoes: Questao[];
   topicos: EditalTopico[];
-  blocos: Bloco[];
   desempenho: GrupoMateria[];
   minutosDia: number;
   agora?: number;
 }): ItemPlano[] {
   const agora = entrada.agora ?? Date.now();
-  const blocoPorId = new Map(entrada.blocos.map((bloco) => [bloco.id, bloco]));
   const forcaDe = new Map(entrada.desempenho.map((grupo) => [grupo.id, grupo]));
 
   const candidatos = entrada.materias
@@ -39,7 +36,7 @@ export function montarPlano(entrada: {
       if (!topicos.length && !questoes.length) return null;
 
       const pesoMedio = topicos.length ? topicos.reduce((total, topico) => total + topico.peso, 0) / topicos.length : 3;
-      const pendentes = topicos.filter((topico) => !topicoCoberto(topico, blocoPorId)).length;
+      const pendentes = topicos.filter((topico) => !topico.feito).length;
       const pendencia = topicos.length ? pendentes / topicos.length : 1;
       const desempenho = forcaDe.get(materia.id);
       const forca = desempenho?.forca ?? 0.6;
@@ -52,7 +49,7 @@ export function montarPlano(entrada: {
       if (topicos.length) partes.push(`peso ${pesoMedio.toFixed(1).replace(".", ",")} no edital`);
       if (pendentes > 0) partes.push(`${pendentes} ${pendentes === 1 ? "tópico pendente" : "tópicos pendentes"}`);
       if (desempenho?.taxa != null) partes.push(`acerto em ${porcentagem(desempenho.taxa)}%`);
-      if (vencidas > 0) partes.push(`${vencidas} ${vencidas === 1 ? "questão vencida" : "questões vencidas"}`);
+      if (vencidas > 0) partes.push(`${vencidas} ${vencidas === 1 ? "card vencido" : "cards vencidos"}`);
       return { materia, score, motivo: partes.join(" · ") || "sem dados ainda" };
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -67,7 +64,7 @@ export function montarPlano(entrada: {
   const itens = escolhidos.map((item) => ({
     materiaId: item.materia.id,
     nome: item.materia.nome,
-    minutos: Math.max(MINIMO, Math.round(((entrada.minutosDia * item.score) / soma) / PASSO) * PASSO),
+    minutos: Math.max(MINIMO, Math.round((entrada.minutosDia * item.score) / soma / PASSO) * PASSO),
     motivo: item.motivo,
   }));
 
@@ -88,4 +85,17 @@ export function montarPlano(entrada: {
     total += PASSO;
   }
   return itens;
+}
+
+/** Plano que você mesmo montou (por exemplo, copiado do Guru Já): minutos por matéria. */
+export function planoManual(materias: Materia[], minutos: Record<string, number>): ItemPlano[] {
+  return materias
+    .filter((materia) => (minutos[materia.id] ?? 0) > 0)
+    .map((materia) => ({
+      materiaId: materia.id,
+      nome: materia.nome,
+      minutos: Math.round(minutos[materia.id]),
+      motivo: "plano que você definiu",
+    }))
+    .sort((a, b) => b.minutos - a.minutos);
 }

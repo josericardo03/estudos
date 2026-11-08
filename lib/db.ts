@@ -1,6 +1,5 @@
 import Dexie, { type Table } from "dexie";
 import type {
-  Bloco,
   Edital,
   EditalMateria,
   EditalTopico,
@@ -17,7 +16,6 @@ import type {
 class BancoFoco extends Dexie {
   materias!: Table<Materia, string>;
   pdfs!: Table<PdfDoc, string>;
-  blocos!: Table<Bloco, string>;
   grifos!: Table<Grifo, string>;
   postits!: Table<PostIt, string>;
   questoes!: Table<Questao, string>;
@@ -47,6 +45,15 @@ class BancoFoco extends Dexie {
       editalTopicos: "id, editalId, materiaId, blocoId",
       lancamentos: "id, materiaId, em",
       estudos: "id, materiaId, em",
+    });
+    // Versão sem blocos: o card pertence à matéria, ao PDF, à página e ao tópico.
+    this.version(4).stores({
+      blocos: null,
+      grifos: "id, pdfId, pagina, createdAt",
+      postits: "id, pdfId, pagina, createdAt",
+      questoes: "id, materiaId, pdfId, topicoId, statusRevisao, createdAt",
+      tentativas: "id, questaoId, materiaId, pdfId, topicoId, em",
+      editalTopicos: "id, editalId, materiaId, pdfId",
     });
   }
 }
