@@ -9,8 +9,17 @@ export function chaveSupabase() {
   );
 }
 
+/**
+ * Decidido na hora do build: as variáveis NEXT_PUBLIC_* viram texto fixo no código,
+ * então o empacotador descarta o lado que não vale (Dexie na nuvem, Supabase no local).
+ */
+export const SUPABASE_CONFIGURADO = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+);
+
 export function supabaseConfigurado() {
-  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && chaveSupabase());
+  return SUPABASE_CONFIGURADO;
 }
 
 let cliente: SupabaseClient | null = null;

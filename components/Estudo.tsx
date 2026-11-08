@@ -46,7 +46,7 @@ export function Estudo() {
     typeof Notification === "undefined" ? "indisponivel" : Notification.permission,
   );
   const cronometro = useCronometro();
-  const agora = useAgora(true);
+  const agora = useAgora(Boolean(cronometro));
 
   const { dados, pronto, erro: erroLeitura } = useConsulta(
     async () => {

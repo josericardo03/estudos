@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { baixarBackup, pedirArmazenamentoPersistente, restaurarBackup, usoDoArmazenamento } from "@/lib/backup";
+import { pedirArmazenamentoPersistente, usoDoArmazenamento } from "@/lib/armazenamento";
 import { mensagemErro } from "@/lib/erros";
 import { usePreferencia } from "@/lib/preferencias";
 import { supabase, supabaseConfigurado } from "@/lib/supabase";
@@ -48,6 +48,7 @@ export function Dados() {
     setErro(null);
     setAviso(null);
     try {
+      const { baixarBackup } = await import("@/lib/backup");
       const tamanho = await baixarBackup();
       setAviso(`Backup gerado (${megabytes(tamanho)}). Guarde o arquivo fora deste aparelho.`);
     } catch (falha) {
@@ -62,6 +63,7 @@ export function Dados() {
     setErro(null);
     setAviso(null);
     try {
+      const { restaurarBackup } = await import("@/lib/backup");
       const total = await restaurarBackup(arquivo);
       setAviso(`${total} itens restaurados. Os que já existiam foram sobrescritos pelo backup.`);
     } catch (falha) {
@@ -172,10 +174,14 @@ export function Dados() {
       {uso ? (
         <section className="mt-10" aria-labelledby="titulo-espaco">
           <h2 id="titulo-espaco" className="font-serif text-3xl">
-            Espaço usado
+            Cache deste aparelho
           </h2>
           <p className="mt-2 text-muted">
-            {megabytes(uso.usado)} de {megabytes(uso.cota)} disponíveis para este site neste aparelho.
+            {megabytes(uso.usado)} de {megabytes(uso.cota)} permitidos pelo navegador.
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            São os arquivos do próprio app (para abrir rápido e sem rede) e as cópias dos PDFs que você abriu. Os seus
+            cards, grifos e PDFs ficam no Supabase e não contam aqui. O cache tem teto e se limpa sozinho.
           </p>
         </section>
       ) : null}

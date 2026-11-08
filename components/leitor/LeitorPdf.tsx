@@ -259,6 +259,7 @@ export function LeitorPdf({
   const ajusteManual = useRef(false);
   const origemMarca = useRef<{ x: number; y: number } | null>(null);
   const inicioToque = useRef<{ x: number; y: number } | null>(null);
+  const quadroMarca = useRef(0);
   const questoesDialogo = useRef<HTMLDialogElement>(null);
   const campoEnunciado = useRef<HTMLTextAreaElement>(null);
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
@@ -911,16 +912,23 @@ export function LeitorPdf({
     const origem = origemMarca.current;
     const ponto = pontoNaFolha(evento);
     if (!origem || !ponto) return;
-    if (sublinhando) {
-      const folha = folhaRef.current;
-      setTraco(folha ? linhaSobPonto(folha, evento.clientX, evento.clientY) : null);
-      return;
-    }
-    setTraco({
-      x: Math.min(origem.x, ponto.x),
-      y: Math.min(origem.y, ponto.y),
-      w: Math.abs(ponto.x - origem.x),
-      h: Math.abs(ponto.y - origem.y),
+    const clienteX = evento.clientX;
+    const clienteY = evento.clientY;
+    // O ponteiro dispara dezenas de eventos por quadro; desenhar o retângulo uma vez por quadro basta.
+    cancelAnimationFrame(quadroMarca.current);
+    quadroMarca.current = requestAnimationFrame(() => {
+      if (!origemMarca.current) return;
+      if (sublinhando) {
+        const folha = folhaRef.current;
+        setTraco(folha ? linhaSobPonto(folha, clienteX, clienteY) : null);
+        return;
+      }
+      setTraco({
+        x: Math.min(origem.x, ponto.x),
+        y: Math.min(origem.y, ponto.y),
+        w: Math.abs(ponto.x - origem.x),
+        h: Math.abs(ponto.y - origem.y),
+      });
     });
   }
 
@@ -930,6 +938,7 @@ export function LeitorPdf({
     origemMarca.current = null;
     inicioToque.current = null;
     const ponto = pontoNaFolha(evento);
+    cancelAnimationFrame(quadroMarca.current);
     setTraco(null);
     if (sublinhando) {
       const folha = folhaRef.current;
@@ -1070,17 +1079,24 @@ export function LeitorPdf({
     const origemY = item.y;
     const ponto = { x: evento.clientX, y: evento.clientY };
     let moveu = false;
+    let quadro = 0;
     function mover(ev: PointerEvent) {
       if (Math.hypot(ev.clientX - ponto.x, ev.clientY - ponto.y) <= 4) return;
       moveu = true;
-      const caixa = folha!.getBoundingClientRect();
-      setRascunho({
-        id: item.id,
-        x: limitar(origemX + (ev.clientX - ponto.x) / caixa.width, 0.01, 0.98),
-        y: limitar(origemY + (ev.clientY - ponto.y) / caixa.height, 0.01, 0.98),
+      const clienteX = ev.clientX;
+      const clienteY = ev.clientY;
+      cancelAnimationFrame(quadro);
+      quadro = requestAnimationFrame(() => {
+        const caixa = folha!.getBoundingClientRect();
+        setRascunho({
+          id: item.id,
+          x: limitar(origemX + (clienteX - ponto.x) / caixa.width, 0.01, 0.98),
+          y: limitar(origemY + (clienteY - ponto.y) / caixa.height, 0.01, 0.98),
+        });
       });
     }
     function soltar(ev: PointerEvent) {
+      cancelAnimationFrame(quadro);
       window.removeEventListener("pointermove", mover);
       window.removeEventListener("pointerup", soltar);
       if (!moveu) {

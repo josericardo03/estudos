@@ -91,7 +91,7 @@ export function Hoje() {
       diasProva: diasAteProvaPorMateria(editais, vinculos, agora),
       estudo: resumirEstudo(estudos, agora),
     };
-  }, [], null);
+  }, [], null, { pausado: sessao !== null });
 
   if (!pronto) return <Abrindo texto="Abrindo o dia…" />;
   if (erro) return <div className="px-5 py-10"><Aviso texto={erro} /></div>;

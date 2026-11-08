@@ -281,19 +281,23 @@ function Simulado({ materias }: { materias: Materia[] }) {
   );
   const emGargalo = useMemo(() => gargalos(historico), [historico]);
 
+  // Gravar a cada tecla seria trabalho à toa: espera uma pausa na digitação.
   useEffect(() => {
     if (!prova) return;
-    const estado: SimuladoSalvo = {
-      salvoEm: Date.now(),
-      ids: prova.map((questao) => questao.id),
-      rascunhos,
-      confiancas,
-      indice,
-      encerrado,
-      julgamentos,
-      tentativas: tentativasDaProva.current,
-    };
-    gravarBruto(CHAVE_SIMULADO, JSON.stringify(estado));
+    const espera = setTimeout(() => {
+      const estado: SimuladoSalvo = {
+        salvoEm: Date.now(),
+        ids: prova.map((questao) => questao.id),
+        rascunhos,
+        confiancas,
+        indice,
+        encerrado,
+        julgamentos,
+        tentativas: tentativasDaProva.current,
+      };
+      gravarBruto(CHAVE_SIMULADO, JSON.stringify(estado));
+    }, 500);
+    return () => clearTimeout(espera);
   }, [prova, rascunhos, confiancas, indice, encerrado, julgamentos]);
 
   function alternar(id: string) {

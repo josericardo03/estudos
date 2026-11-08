@@ -6,7 +6,6 @@ import { getDb } from "./db";
 import { ErroEstudo } from "./erros";
 import { validarFaixa } from "./faixa";
 import { repoRemoto } from "./repoRemoto";
-import { supabaseConfigurado } from "./supabase";
 import type {
   CorGrifo,
   Edital,
@@ -574,8 +573,13 @@ const repoLocal = {
   },
 };
 
-function escolherRepo() {
-  return supabaseConfigurado() ? repoRemoto : repoLocal;
-}
+// As variáveis NEXT_PUBLIC_* viram texto fixo no build. Com a condição escrita aqui, no mesmo
+// arquivo da escolha, o empacotador resolve o ternário e descarta o repositório que não vale
+// (e, com ele, o Dexie na versão da nuvem).
+const NA_NUVEM = process.env.NEXT_PUBLIC_SUPABASE_URL
+  ? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    ? true
+    : false
+  : false;
 
-export const repo = escolherRepo();
+export const repo = NA_NUVEM ? repoRemoto : repoLocal;

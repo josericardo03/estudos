@@ -121,8 +121,13 @@ type AgendaCard = {
 const cachePdf = new Map<string, Blob>();
 const cacheMarca = new Map<string, Blob>();
 const PDFS_NA_MEMORIA = 3;
-const NOME_CACHE_PDF = "foco-pdfs-v1";
-const LIMITE_CACHE_PDF = 600 * 1024 * 1024;
+type Espaco = "pdfs" | "marcas";
+
+/** Cada espaço tem o seu cache no aparelho e um teto de tamanho: nada cresce sem limite. */
+const CACHE_DO_ESPACO: Record<Espaco, { nome: string; limite: number }> = {
+  pdfs: { nome: "foco-pdfs-v1", limite: 600 * 1024 * 1024 },
+  marcas: { nome: "foco-marcas-v1", limite: 60 * 1024 * 1024 },
+};
 
 /** Guarda só os PDFs mais recentes na memória. O resto fica no Cache Storage. */
 function lembrarPdf(caminho: string, blob: Blob) {
@@ -135,32 +140,32 @@ function lembrarPdf(caminho: string, blob: Blob) {
   }
 }
 
-async function cacheDePdfs() {
+async function abrirCache(espaco: Espaco) {
   if (typeof caches === "undefined") return null;
   try {
-    return await caches.open(NOME_CACHE_PDF);
+    return await caches.open(CACHE_DO_ESPACO[espaco].nome);
   } catch {
     return null;
   }
 }
 
-function enderecoDoCache(caminho: string) {
-  return new Request(`/__foco-cache/pdfs/${encodeURIComponent(caminho)}`);
+function enderecoDoCache(espaco: Espaco, caminho: string) {
+  return new Request(`/__foco-cache/${espaco}/${encodeURIComponent(caminho)}`);
 }
 
-async function lerPdfDoCache(caminho: string) {
-  const cache = await cacheDePdfs();
+async function lerDoCache(espaco: Espaco, caminho: string) {
+  const cache = await abrirCache(espaco);
   if (!cache) return null;
   try {
-    const resposta = await cache.match(enderecoDoCache(caminho));
+    const resposta = await cache.match(enderecoDoCache(espaco, caminho));
     return resposta ? await resposta.blob() : null;
   } catch {
     return null;
   }
 }
 
-async function guardarPdfNoCache(caminho: string, blob: Blob) {
-  const cache = await cacheDePdfs();
+async function guardarNoCache(espaco: Espaco, caminho: string, blob: Blob) {
+  const cache = await abrirCache(espaco);
   if (!cache) return;
   try {
     const chaves = await cache.keys();
@@ -174,30 +179,37 @@ async function guardarPdfNoCache(caminho: string, blob: Blob) {
     }
     // Os mais antigos entram primeiro em keys(): saem primeiro.
     for (const item of tamanhos) {
-      if (total <= LIMITE_CACHE_PDF) break;
+      if (total <= CACHE_DO_ESPACO[espaco].limite) break;
       await cache.delete(item.chave);
       total -= item.tamanho;
     }
     await cache.put(
-      enderecoDoCache(caminho),
+      enderecoDoCache(espaco, caminho),
       new Response(blob, {
-        headers: { "content-type": "application/pdf", "content-length": String(blob.size) },
+        headers: {
+          "content-type": espaco === "pdfs" ? "application/pdf" : "image/png",
+          "content-length": String(blob.size),
+        },
       }),
     );
   } catch {
-    /* sem espaço ou sem permissão: o PDF continua vindo do servidor */
+    /* sem espaço ou sem permissão: o arquivo continua vindo do servidor */
   }
 }
 
-async function tirarPdfDoCache(caminho: string) {
-  const cache = await cacheDePdfs();
+async function tirarDoCache(espaco: Espaco, caminho: string) {
+  const cache = await abrirCache(espaco);
   if (!cache) return;
   try {
-    await cache.delete(enderecoDoCache(caminho));
+    await cache.delete(enderecoDoCache(espaco, caminho));
   } catch {
     /* nada a fazer */
   }
 }
+
+const lerPdfDoCache = (caminho: string) => lerDoCache("pdfs", caminho);
+const guardarPdfNoCache = (caminho: string, blob: Blob) => guardarNoCache("pdfs", caminho, blob);
+const tirarPdfDoCache = (caminho: string) => tirarDoCache("pdfs", caminho);
 
 function novoId() {
   return crypto.randomUUID();
@@ -399,6 +411,13 @@ async function baixar(bucket: "pdfs" | "marcas", caminho: string, cache: Map<str
       return emDisco;
     }
   }
+  if (bucket === "marcas") {
+    const emDisco = await lerDoCache("marcas", caminho);
+    if (emDisco && emDisco.size > 0) {
+      cache.set(caminho, emDisco);
+      return emDisco;
+    }
+  }
   const { data, error } = await supabase().storage.from(bucket).download(caminho);
   checar(error, fallback);
   if (!data) throw new ErroEstudo(fallback);
@@ -407,6 +426,7 @@ async function baixar(bucket: "pdfs" | "marcas", caminho: string, cache: Map<str
     void guardarPdfNoCache(caminho, data);
   } else {
     cache.set(caminho, data);
+    void guardarNoCache("marcas", caminho, data);
   }
   return data;
 }
@@ -505,7 +525,10 @@ export const repoRemoto = {
       if (marcas.length) {
         const { error } = await supabase().storage.from("marcas").remove(marcas);
         checar(error, "Não foi possível excluir a matéria.");
-        for (const caminho of marcas) cacheMarca.delete(caminho);
+        for (const caminho of marcas) {
+          cacheMarca.delete(caminho);
+          void tirarDoCache("marcas", caminho);
+        }
       }
       if (linhas.length) {
         const caminhos = linhas.map((pdf) => pdf.storage_path);
@@ -615,7 +638,10 @@ export const repoRemoto = {
       if (marcas.length) {
         const { error } = await supabase().storage.from("marcas").remove(marcas);
         checar(error, "Não foi possível excluir o PDF.");
-        for (const caminho of marcas) cacheMarca.delete(caminho);
+        for (const caminho of marcas) {
+          cacheMarca.delete(caminho);
+          void tirarDoCache("marcas", caminho);
+        }
       }
       const caminho = (data as { storage_path: string } | null)?.storage_path;
       if (caminho) {
@@ -696,6 +722,7 @@ export const repoRemoto = {
       checar(error, "Não foi possível apagar a marcação.");
       if (caminho) {
         cacheMarca.delete(caminho);
+        void tirarDoCache("marcas", caminho);
         await supabase().storage.from("marcas").remove([caminho]);
       }
       avisarMudanca();
@@ -974,6 +1001,7 @@ export const repoRemoto = {
       checar(error, "Não foi possível excluir o card.");
       if (caminho) {
         cacheMarca.delete(caminho);
+        void tirarDoCache("marcas", caminho);
         await supabase().storage.from("marcas").remove([caminho]);
       }
       avisarMudanca();

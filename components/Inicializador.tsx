@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { pedirArmazenamentoPersistente } from "@/lib/backup";
+import { pedirArmazenamentoPersistente } from "@/lib/armazenamento";
 import { supabaseConfigurado } from "@/lib/supabase";
 import { useAplicarTema } from "@/lib/tema";
 
