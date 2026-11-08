@@ -39,6 +39,41 @@ export function NaoEncontrado({ titulo, detalhe }: { titulo: string; detalhe: st
   );
 }
 
+export function QuestaoConferencia({
+  indice,
+  enunciado,
+  resposta,
+  extra,
+}: {
+  indice: number;
+  enunciado: string;
+  resposta: string;
+  extra?: React.ReactNode;
+}) {
+  const [aberta, setAberta] = useState(false);
+  return (
+    <div className="flex items-start gap-2">
+      <button
+        type="button"
+        className="btn btn-seta shrink-0"
+        aria-expanded={aberta}
+        aria-label={aberta ? `Ocultar resposta da questão ${indice}` : `Mostrar resposta da questão ${indice}`}
+        onClick={() => setAberta((atual) => !atual)}
+      >
+        <span className={aberta ? "seta seta-aberta" : "seta"} aria-hidden />
+      </button>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-serif text-xl">Questão {indice}</h3>
+          {extra}
+        </div>
+        <p className="mt-2 whitespace-pre-wrap">{enunciado}</p>
+        {aberta ? <p className="mt-3 whitespace-pre-wrap font-serif text-lg leading-relaxed">{resposta}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 export function MarcaPrioridade({ cor }: { cor: CorGrifo }) {
   return (
     <span className={`marca marca-${cor}`}>

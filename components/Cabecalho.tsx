@@ -53,7 +53,7 @@ export function Cabecalho() {
   const { dados: vencidas } = useConsulta(() => repo.questoes.contarVencidas(), [], 0);
   return (
     <header
-      className="sticky top-0 z-30 border-b border-line bg-[var(--header-bg)] backdrop-blur"
+      className="app-nav sticky top-0 z-30 border-b border-line bg-[var(--header-bg)] backdrop-blur"
       style={{ height: "var(--header-h)", paddingTop: "env(safe-area-inset-top, 0px)" }}
     >
       <a href="#conteudo" className="pular-conteudo">
