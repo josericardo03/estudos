@@ -714,6 +714,29 @@ a.citacao {
   top: 0;
 }
 
+.atalhos-externos {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.05rem;
+}
+
+.atalho-externo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.atalho-externo:hover {
+  color: var(--ink);
+  background: var(--pine-soft);
+}
+
 .nav-rolagem {
   scrollbar-width: none;
 }
@@ -764,6 +787,11 @@ a.citacao {
     display: inline-flex;
     align-items: center;
     min-height: 2.5rem;
+  }
+
+  .atalho-externo {
+    width: 2.5rem;
+    height: 2.5rem;
   }
 
   input[type="checkbox"] {
