@@ -261,6 +261,7 @@ export function LeitorPdf({
   const inicioToque = useRef<{ x: number; y: number } | null>(null);
   const quadroMarca = useRef(0);
   const questoesDialogo = useRef<HTMLDialogElement>(null);
+  const postitDialogo = useRef<HTMLDialogElement>(null);
   const campoEnunciado = useRef<HTMLTextAreaElement>(null);
   const marcasParaDesfazer = useRef<{ id: string; pagina: number }[]>([]);
   const desfazerRef = useRef<() => void>(() => {});
@@ -288,6 +289,7 @@ export function LeitorPdf({
   const [postit, setPostit] = useState("");
   const [colocandoPostit, setColocandoPostit] = useState(false);
   const [postitAberto, setPostitAberto] = useState<string | null>(null);
+  const [notaModal, setNotaModal] = useState<string | null>(null);
   const [painel, setPainel] = useState<"anotacoes" | "caderno" | "busca" | "oculto">("anotacoes");
   const [termoBusca, setTermoBusca] = useState("");
   const [ferramentas, setFerramentas] = useState(false);
@@ -379,11 +381,22 @@ export function LeitorPdf({
     setPaginaVista(paginaSegura);
     setColocandoPostit(false);
     setPostitAberto(null);
+    setNotaModal(null);
     setEditandoQuestao(null);
   }
   useEffect(() => {
     questoesDialogo.current?.close();
   }, [paginaSegura]);
+
+  useLayoutEffect(() => {
+    const dialogo = postitDialogo.current;
+    if (!dialogo) return;
+    if (notaModal) {
+      if (!dialogo.open) dialogo.showModal();
+      return;
+    }
+    if (dialogo.open) dialogo.close();
+  }, [notaModal]);
 
   useEffect(() => {
     if (!postitAberto) return;
@@ -656,6 +669,7 @@ export function LeitorPdf({
         setSublinhar(false);
         setColocandoPostit(false);
         setPostitAberto(null);
+        setNotaModal(null);
       }
       if ((evento.ctrlKey || evento.metaKey) && !evento.shiftKey && evento.key.toLowerCase() === "z") {
         evento.preventDefault();
@@ -1101,7 +1115,8 @@ export function LeitorPdf({
       window.removeEventListener("pointerup", soltar);
       if (!moveu) {
         setRascunho(null);
-        setPostitAberto((atual) => (atual === item.id ? null : item.id));
+        setPostitAberto(item.id);
+        setNotaModal(item.id);
         return;
       }
       const caixa = folha!.getBoundingClientRect();
@@ -1781,8 +1796,9 @@ export function LeitorPdf({
                     type="button"
                     className={`postit-marca${foco?.id === item.id ? " marca-foco" : ""}`}
                     style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
-                    aria-pressed={postitAberto === item.id}
-                    aria-controls={`postit-${item.id}`}
+                    aria-pressed={notaModal === item.id}
+                    aria-haspopup="dialog"
+                    aria-controls="popup-postit"
                     aria-label={`Post-it: ${item.texto}`}
                     title={item.texto}
                     onPointerDown={(evento) => iniciarArraste(evento, item)}
@@ -2102,6 +2118,28 @@ export function LeitorPdf({
       </aside>
       ) : null}
 
+      <dialog
+        ref={postitDialogo}
+        id="popup-postit"
+        className="popup popup-postit"
+        aria-labelledby="titulo-popup-postit"
+        onClose={() => setNotaModal(null)}
+        onClick={(evento) => {
+          if (evento.target === evento.currentTarget) postitDialogo.current?.close();
+        }}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-[#e4d48a] px-4 py-3">
+          <h2 id="titulo-popup-postit" className="font-serif text-xl">
+            Post-it
+          </h2>
+          <button type="button" className="btn shrink-0" onClick={() => postitDialogo.current?.close()}>
+            Fechar
+          </button>
+        </div>
+        <p className="whitespace-pre-wrap px-4 py-4 font-serif text-xl leading-relaxed">
+          {postits.find((item) => item.id === notaModal)?.texto}
+        </p>
+      </dialog>
       <dialog
         ref={questoesDialogo}
         className="popup"

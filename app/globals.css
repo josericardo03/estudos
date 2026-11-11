@@ -631,6 +631,13 @@ a.citacao {
   padding: 0;
 }
 
+.popup-postit {
+  width: min(28rem, calc(100vw - 2rem));
+  border-color: #e4d48a;
+  background: var(--note);
+  color: #1c241f;
+}
+
 .popup::backdrop {
   background: rgb(34 28 22 / 0.45);
 }
